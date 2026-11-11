@@ -6,6 +6,7 @@ import java.util.List;
 import java.util.TreeMap;
 
 public class TreeIndex implements Serializable {
+    private static final long serialVersionUID = 1L;
 
     private String tableName;
     private String columnName;
@@ -47,6 +48,7 @@ public class TreeIndex implements Serializable {
 
     }
 
+
     public void remove(Object colValue, Object primaryKey) {
 
         if (colValue == null) {
@@ -81,6 +83,43 @@ public class TreeIndex implements Serializable {
             return (TreeIndex) ois.readObject();
         }
     }
+
+    public List<Object> greaterThan(Comparable value) {
+        List<Object> result = new ArrayList<>();
+        for (List<Object> pks : tree.tailMap(value, false).values()) {
+            result.addAll(pks);
+        }
+        return result;
+    }
+
+    public List<Object> lessThan(Comparable value) {
+        List<Object> result = new ArrayList<>();
+        for (List<Object> pks : tree.headMap(value, false).values()) {
+            result.addAll(pks);
+        }
+        return result;
+    }
+
+
+    public List<Object> greaterOrEqual(Comparable value) {
+        List<Object> result = new ArrayList<>();
+        for (List<Object> pks : tree.tailMap(value, true).values()) {
+            result.addAll(pks);
+        }
+        return result;
+    }
+
+    public List<Object> lessOrEqual(Comparable value) {
+        List<Object> result = new ArrayList<>();
+        for (List<Object> pks : tree.headMap(value, true).values()) {
+            result.addAll(pks);
+        }
+        return result;
+    }
+
+
+
+
 }
 
 
