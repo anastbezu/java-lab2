@@ -35,7 +35,8 @@ public class FileTableRepository implements TableRepository {
         File file = getFile(table.getName());
         File tempFile = new File(dataDir, table.getName().toLowerCase() + ".db.tmp");
         try {
-            try (ObjectOutputStream out = new ObjectOutputStream(new FileOutputStream(tempFile))) {
+            try (FileOutputStream fileOut = new FileOutputStream(tempFile);
+                 ObjectOutputStream out = new ObjectOutputStream(fileOut)) {
                 out.writeObject(table);
             }
             Files.move(tempFile.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING);
@@ -50,9 +51,10 @@ public class FileTableRepository implements TableRepository {
         if (!file.exists()) {
             return null;
         }
-        try (ObjectInputStream in = new ObjectInputStream(new FileInputStream(file))) {
+        try (FileInputStream fileIn = new FileInputStream(file);
+             ObjectInputStream in = new ObjectInputStream(fileIn)) {
             return (Table) in.readObject();
-        } catch (IOException | ClassNotFoundException e) {
+        } catch (IOException | ClassNotFoundException | ClassCastException e) {
             throw new DatabaseException("Не удалось прочитать таблицу '" + tableName + "': " + e.getMessage());
         }
     }

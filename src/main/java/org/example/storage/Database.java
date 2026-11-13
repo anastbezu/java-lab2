@@ -30,6 +30,7 @@ public class Database {
     private final TableRepository repository;
     private final Map<String, Table> tables = new LinkedHashMap<>();
     private final Map<String, TreeIndex> indexes = new LinkedHashMap<>();
+    private final List<String> loadErrors = new ArrayList<>();
 
     /**
      * Открывает базу в папке {@code data}.
@@ -230,8 +231,9 @@ public class Database {
     }
 
     /**
-     * Выборка по условию {@code WHERE column = value}
-     * Если по колонке есть индекс, строки берутся из индекса (быстро, O(log N)) иначе просматривается вся таблица
+     * Выборка по условию {@code WHERE column = value}.
+     * Если по колонке есть индекс, строки берутся из индекса (быстро, O(log N)),
+     * иначе просматривается вся таблица.
      *
      * @param value значение нужного типа (результат {@code DataType.parse})
      * @param columns нужные колонки, null или ["*"] — все
@@ -239,40 +241,29 @@ public class Database {
      */
     public List<Row> selectEquals(String tableName, String columnName, Object value, List<String> columns)
             throws DatabaseException {
+        if (findIndex(tableName, columnName) != null) {
+            return selectByIndex(tableName, columnName, "=", value, columns);
+        }
         Table table = getTable(tableName);
-        Column column = table.getSchema().getColumn(columnName);
-        if (column == null) {
-            throw new DatabaseException("Колонка '" + columnName + "' не найдена в таблице '" + table.getName() + "'");
-        }
-        if (!column.getType().isCompatible(value)) {
-            throw new DatabaseException("Значение '" + value + "' не подходит к типу " + column.getType());
-        }
-
-        TreeIndex index = findIndex(tableName, columnName);
-        if (index == null) {
-            return table.select(columns, row -> value != null && value.equals(row.get(columnName)));
-        }
-
-        table.checkColumnsExist(columns);
-        List<Row> result = new ArrayList<>();
-        for (Object key : index.get(value)) {
-            result.add(table.project(table.getById(key), columns));
-        }
-        return result;
+        checkValue(table, columnName, value);
+        return table.select(columns, row -> value != null && value.equals(row.get(columnName)));
     }
 
     /**
-     * Выборка по индексу для условий =, >, <, >=, <=
-     * Строки берутся из дерева индекса за O(log N)
+     * Выборка по индексу для условий =, &gt;, &lt;, &gt;=, &lt;=.
+     * Нужные ключи находятся в дереве индекса за O(log N).
      *
      * @param op оператор сравнения
-     * @param value значение нужного типа (не null)
-     * @throws DatabaseException если по колонке нет индекса или оператор не поддерживается
+     * @param value значение нужного типа (результат {@code DataType.parse})
+     * @param columns нужные колонки, null или ["*"] — все
+     * @throws DatabaseException если по колонке нет индекса, тип значения не подходит
+     *                           или оператор не поддерживается
      */
-    @SuppressWarnings({"unchecked", "rawtypes"})
+    @SuppressWarnings("rawtypes")
     public List<Row> selectByIndex(String tableName, String columnName, String op, Object value,
                                    List<String> columns) throws DatabaseException {
         Table table = getTable(tableName);
+        checkValue(table, columnName, value);
         TreeIndex index = findIndex(tableName, columnName);
         if (index == null) {
             throw new DatabaseException("По колонке '" + columnName + "' нет индекса");
@@ -281,12 +272,23 @@ public class Database {
 
         List<Object> keys;
         switch (op) {
-            case "=":  keys = index.get(value); break;
-            case ">":  keys = index.greaterThan((Comparable) value); break;
-            case "<":  keys = index.lessThan((Comparable) value); break;
-            case ">=": keys = index.greaterOrEqual((Comparable) value); break;
-            case "<=": keys = index.lessOrEqual((Comparable) value); break;
-            default: throw new DatabaseException("Оператор '" + op + "' не поддерживает индекс");
+            case "=":
+                keys = index.get(value);
+                break;
+            case ">":
+                keys = index.greaterThan((Comparable) value);
+                break;
+            case "<":
+                keys = index.lessThan((Comparable) value);
+                break;
+            case ">=":
+                keys = index.greaterOrEqual((Comparable) value);
+                break;
+            case "<=":
+                keys = index.lessOrEqual((Comparable) value);
+                break;
+            default:
+                throw new DatabaseException("Оператор '" + op + "' не поддерживает индекс");
         }
 
         List<Row> result = new ArrayList<>();
@@ -300,7 +302,8 @@ public class Database {
     }
 
     /**
-     * Создаёт индекс (CREATE INDEX name ON table (column)), заполняет его данными таблицы и сохраняет в файл {@code <name>.idx}
+     * Создаёт индекс (CREATE INDEX name ON table (column)), заполняет его данными таблицы
+     * и сохраняет в файл {@code <name>.idx}.
      *
      * @throws DatabaseException если имя индекса занято, нет таблицы или колонки, или по колонке уже есть индекс
      */
@@ -342,6 +345,16 @@ public class Database {
     }
 
     /**
+     * Возвращает ошибки, возникшие при загрузке базы с диска (например, повреждённый файл таблицы).
+     * Сама база ничего не печатает: показать эти сообщения пользователю — задача консоли.
+     *
+     * @return список сообщений; пустой, если всё загрузилось
+     */
+    public List<String> getLoadErrors() {
+        return new ArrayList<>(loadErrors);
+    }
+
+    /**
      * Сохраняет таблицу и все её индексы на диск
      */
     private void save(Table table) throws DatabaseException {
@@ -360,14 +373,15 @@ public class Database {
             try {
                 tables.put(name.toLowerCase(), repository.load(name));
             } catch (DatabaseException e) {
-                System.out.println("Ошибка: " + e.getMessage());
+                loadErrors.add(e.getMessage());
             }
         }
     }
 
     /**
-     * Загружает индексы из файлов .idx. Если файл повреждён или пропал (например, программа упала во время записи), индекс строится заново по данным таблицы
-     *
+     * Загружает индексы из файлов .idx. Если файл повреждён или пропал
+     * (например, программа упала во время записи), индекс строится заново по данным таблицы
+     * и сразу сохраняется.
      */
     private void loadIndexes() {
         for (Table table : tables.values()) {
@@ -377,9 +391,13 @@ public class Database {
                 try {
                     indexes.put(indexName, TreeIndex.load(indexFile.getPath()));
                 } catch (Exception e) {
-                    System.out.println("Индекс '" + indexName + "' не прочитался, строим его заново");
-                    indexes.put(indexName, buildIndex(table, index.getValue()));
-                    indexFile.delete();
+                    TreeIndex rebuilt = buildIndex(table, index.getValue());
+                    indexes.put(indexName, rebuilt);
+                    try {
+                        rebuilt.save(indexFile.getPath());
+                    } catch (Exception saveError) {
+                        loadErrors.add("Не удалось сохранить индекс '" + indexName + "': " + saveError.getMessage());
+                    }
                 }
             }
         }
@@ -396,6 +414,19 @@ public class Database {
 
     private File getIndexFile(String indexName) {
         return new File(dataDir, indexName + ".idx");
+    }
+
+    /**
+     * Проверяет, что столбец есть в таблице и значение подходит к его типу.
+     */
+    private void checkValue(Table table, String columnName, Object value) throws DatabaseException {
+        Column column = table.getSchema().getColumn(columnName);
+        if (column == null) {
+            throw new DatabaseException("Колонка '" + columnName + "' не найдена в таблице '" + table.getName() + "'");
+        }
+        if (!column.getType().isCompatible(value)) {
+            throw new DatabaseException("Значение '" + value + "' не подходит к типу " + column.getType());
+        }
     }
 
     /**
