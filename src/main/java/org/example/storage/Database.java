@@ -230,12 +230,11 @@ public class Database {
     }
 
     /**
-     * Выборка по условию {@code WHERE column = value}.
-     * Если по колонке есть индекс, строки берутся из индекса (быстро, O(log N)),
-     * иначе просматривается вся таблица.
+     * Выборка по условию {@code WHERE column = value}
+     * Если по колонке есть индекс, строки берутся из индекса (быстро, O(log N)) иначе просматривается вся таблица
      *
      * @param value значение нужного типа (результат {@code DataType.parse})
-     * @param columns нужные колонки; null или ["*"] — все
+     * @param columns нужные колонки, null или ["*"] — все
      * @throws DatabaseException если нет таблицы или колонки, или тип значения не подходит
      */
     public List<Row> selectEquals(String tableName, String columnName, Object value, List<String> columns)
@@ -263,8 +262,45 @@ public class Database {
     }
 
     /**
-     * Создаёт индекс (CREATE INDEX name ON table (column)), заполняет его данными таблицы
-     * и сохраняет в файл {@code <name>.idx}.
+     * Выборка по индексу для условий =, >, <, >=, <=
+     * Строки берутся из дерева индекса за O(log N)
+     *
+     * @param op оператор сравнения
+     * @param value значение нужного типа (не null)
+     * @throws DatabaseException если по колонке нет индекса или оператор не поддерживается
+     */
+    @SuppressWarnings({"unchecked", "rawtypes"})
+    public List<Row> selectByIndex(String tableName, String columnName, String op, Object value,
+                                   List<String> columns) throws DatabaseException {
+        Table table = getTable(tableName);
+        TreeIndex index = findIndex(tableName, columnName);
+        if (index == null) {
+            throw new DatabaseException("По колонке '" + columnName + "' нет индекса");
+        }
+        table.checkColumnsExist(columns);
+
+        List<Object> keys;
+        switch (op) {
+            case "=":  keys = index.get(value); break;
+            case ">":  keys = index.greaterThan((Comparable) value); break;
+            case "<":  keys = index.lessThan((Comparable) value); break;
+            case ">=": keys = index.greaterOrEqual((Comparable) value); break;
+            case "<=": keys = index.lessOrEqual((Comparable) value); break;
+            default: throw new DatabaseException("Оператор '" + op + "' не поддерживает индекс");
+        }
+
+        List<Row> result = new ArrayList<>();
+        for (Object key : keys) {
+            Row row = table.getById(key);
+            if (row != null) {
+                result.add(table.project(row, columns));
+            }
+        }
+        return result;
+    }
+
+    /**
+     * Создаёт индекс (CREATE INDEX name ON table (column)), заполняет его данными таблицы и сохраняет в файл {@code <name>.idx}
      *
      * @throws DatabaseException если имя индекса занято, нет таблицы или колонки, или по колонке уже есть индекс
      */
@@ -288,7 +324,7 @@ public class Database {
     }
 
     /**
-     * Ищет индекс по таблице и колонке.
+     * Ищет индекс по таблице и колонке
      *
      * @return индекс или null, если колонка не проиндексирована
      */
@@ -306,7 +342,7 @@ public class Database {
     }
 
     /**
-     * Сохраняет таблицу и все её индексы на диск.
+     * Сохраняет таблицу и все её индексы на диск
      */
     private void save(Table table) throws DatabaseException {
         repository.save(table);
@@ -330,18 +366,20 @@ public class Database {
     }
 
     /**
-     * Загружает индексы из файлов .idx. Если файл повреждён или пропал
-     * (например, программа упала во время записи), индекс строится заново по данным таблицы.
+     * Загружает индексы из файлов .idx. Если файл повреждён или пропал (например, программа упала во время записи), индекс строится заново по данным таблицы
+     *
      */
     private void loadIndexes() {
         for (Table table : tables.values()) {
             for (Map.Entry<String, String> index : table.getIndexes().entrySet()) {
                 String indexName = index.getKey();
+                File indexFile = getIndexFile(indexName);
                 try {
-                    indexes.put(indexName, TreeIndex.load(getIndexFile(indexName).getPath()));
+                    indexes.put(indexName, TreeIndex.load(indexFile.getPath()));
                 } catch (Exception e) {
                     System.out.println("Индекс '" + indexName + "' не прочитался, строим его заново");
                     indexes.put(indexName, buildIndex(table, index.getValue()));
+                    indexFile.delete();
                 }
             }
         }
@@ -361,7 +399,7 @@ public class Database {
     }
 
     /**
-     * Проверяет при CREATE TABLE, что внешний ключ ссылается на первичный ключ существующей таблицы того же типа.
+     * Проверяет при CREATE TABLE, что внешний ключ ссылается на первичный ключ существующей таблицы того же типа
      */
     private void checkForeignKeyDefinition(Column col) throws DatabaseException {
         if (!hasTable(col.getForeignKeyTable())) {
@@ -376,7 +414,7 @@ public class Database {
     }
 
     /**
-     * Проверяет, что в родительской таблице есть строка с таким первичным ключом.
+     * Проверяет, что в родительской таблице есть строка с таким первичным ключом
      */
     private void checkParentExists(Column fkColumn, Object value) throws DatabaseException {
         if (value != null && !getTable(fkColumn.getForeignKeyTable()).containsKey(value)) {
@@ -386,7 +424,7 @@ public class Database {
     }
 
     /**
-     * Проверяет, что на удаляемые строки не ссылается ни одна другая таблица.
+     * Проверяет, что на удаляемые строки не ссылается ни одна другая таблица
      */
     private void checkNotReferenced(Table parent, Set<Object> keys) throws DatabaseException {
         for (Table child : tables.values()) {

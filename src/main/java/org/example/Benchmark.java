@@ -13,10 +13,29 @@ import java.util.Arrays;
 import java.util.List;
 import java.util.Random;
 
+/**
+ * Замеры производительности SELECT на 50 000 строк (без индекса и с индексом)
+ */
 public class Benchmark {
+    /**
+     * Запускает замеры и выводит результаты в консоль
+     *
+     * @param args аргументы командной строки не используются
+     * @throws Exception если не удалось создать таблицу или выполнить запрос
+     */
     public static void main(String[] args) throws Exception {
-        //
+        // чистим данные прошлого запуска
         File dir = new File("bench_data");
+        if (dir.exists()) {
+            File[] files = dir.listFiles();
+            if (files != null) {
+                for (File f : files) {
+                    f.delete(); // удаляем .db и .idx файлы
+                }
+            }
+            dir.delete();
+        }
+
         Database db = new Database(dir);
 
         db.createTable(new TableSchema("cars", Arrays.asList(
@@ -26,7 +45,7 @@ public class Benchmark {
                 new Column("release_date", DataType.DATE),
                 new Column("in_stock", DataType.BOOLEAN))));
         String[] brands = {"BMW", "Toyota", "Audi", "Honda", "Ford"};
-        Random random = new Random();
+        Random random = new Random(42);
         List<Row> rows = new ArrayList<>();
 
         for (int i = 1; i <= 50000; i++) {
@@ -40,49 +59,91 @@ public class Benchmark {
         }
         db.insertAll("cars", rows);
         System.out.println("Вставлено строк: " + rows.size());
+        List<String> cols = Arrays.asList("id");
 
-        int repeats = 100;
-        long t1 = System.currentTimeMillis();
+        // цена, которая точно есть в таблице, и узкий диапазон
+        double existingPrice = (Double) rows.get(25000).get("price");
+        double rangeFrom = 99000.0;
+
+        // прогрев, чтобы первый замер не был занижен
+        for (int i = 0; i < 20; i++) {
+            db.selectEquals("cars", "brand", "BMW", cols);
+            db.select("cars", cols, row -> (Double) row.get("price") > rangeFrom);
+        }
+
         int found = 0;
-        for (int i = 0; i < repeats; i++) {
-            found = db.selectEquals("cars", "brand", "BMW", Arrays.asList("id")).size();
-        }
-        long timeNoIndex = System.currentTimeMillis() - t1;
-        System.out.println("Без индекса: " + timeNoIndex + " мс (найдено " + found + ")");
 
-        long tb = System.currentTimeMillis();
+        // 1. brand = 'BMW' (низкая)
+        int repeats = 100;
+        long t1 = System.nanoTime();
+        for (int i = 0; i < repeats; i++) {
+            found = db.selectEquals("cars", "brand", "BMW", cols).size();
+        }
+        long brandNo = (System.nanoTime() - t1) / 1_000_000;
+        System.out.println("brand = 'BMW', без индекса: " + brandNo + " мс (найдено " + found + ")");
+
+        long tb = System.nanoTime();
         db.createIndex("idx_cars_brand", "cars", "brand");
-        System.out.println("Построение индекса: " + (System.currentTimeMillis() - tb) + " мс");
+        System.out.println("Построение индекса по brand: " + (System.nanoTime() - tb) / 1_000_000 + " мс");
 
-        long t2 = System.currentTimeMillis();
+        long t2 = System.nanoTime();
         for (int i = 0; i < repeats; i++) {
-            found = db.selectEquals("cars", "brand", "BMW", Arrays.asList("id")).size();
+            found = db.selectEquals("cars", "brand", "BMW", cols).size();
         }
-        long timeWithIndex = System.currentTimeMillis() - t2;
-        System.out.println("С индексом: " + timeWithIndex + " мс (найдено " + found + ")");
+        long brandWith = (System.nanoTime() - t2) / 1_000_000;
+        System.out.println("brand = 'BMW', с индексом: " + brandWith + " мс (найдено " + found + ")");
+        printSpeedup(brandNo, brandWith);
 
-        if (timeWithIndex > 0) {
-            System.out.println("Ускорение: в " + (double) timeNoIndex / timeWithIndex + " раз");
-        }
-
+        // 2. price = существующее значение (высокая)
         int repeats2 = 1000;
-
         long p1 = System.nanoTime();
         for (int i = 0; i < repeats2; i++) {
-            db.selectEquals("cars", "price", 55000.0, Arrays.asList("id"));
+            found = db.selectEquals("cars", "price", existingPrice, cols).size();
         }
-        long priceNoIndex = System.nanoTime() - p1;
-        System.out.println("Цена, без индекса: " + priceNoIndex / 1_000_000 + " мс");
+        long priceNo = (System.nanoTime() - p1) / 1_000_000;
+        System.out.println("price = " + existingPrice + ", без индекса: " + priceNo + " мс (найдено " + found + ")");
+
+        // 3. Диапазон - price > 99000
+        int repeats3 = 100;
+        long r1 = System.nanoTime();
+        for (int i = 0; i < repeats3; i++) {
+            found = db.select("cars", cols, row -> (Double) row.get("price") > rangeFrom).size();
+        }
+        long rangeNo = (System.nanoTime() - r1) / 1_000_000;
+        System.out.println("price > " + rangeFrom + ", без индекса: " + rangeNo + " мс (найдено " + found + ")");
 
         db.createIndex("idx_cars_price", "cars", "price");
 
         long p2 = System.nanoTime();
         for (int i = 0; i < repeats2; i++) {
-            db.selectEquals("cars", "price", 55000.0, Arrays.asList("id"));
+            found = db.selectEquals("cars", "price", existingPrice, cols).size();
         }
-        long priceWithIndex = System.nanoTime() - p2;
-        System.out.println("Цена, с индексом: " + priceWithIndex / 1_000_000.0 + " мс");
+        long priceWith = (System.nanoTime() - p2) / 1_000_000;
+        System.out.println("price = " + existingPrice + ", с индексом: " + priceWith + " мс (найдено " + found + ")");
+        printSpeedup(priceNo, priceWith);
 
-        System.out.println("Ускорение: в " + (double) priceNoIndex / priceWithIndex + " раз");
+        long r2 = System.nanoTime();
+        for (int i = 0; i < repeats3; i++) {
+            found = db.selectByIndex("cars", "price", ">", rangeFrom, cols).size();
+        }
+        long rangeWith = (System.nanoTime() - r2) / 1_000_000;
+        System.out.println("price > " + rangeFrom + ", с индексом: " + rangeWith + " мс (найдено " + found + ")");
+        printSpeedup(rangeNo, rangeWith);
+
+        System.out.println("Повторов: brand " + repeats + ", price = " + repeats2 + ", диапазон " + repeats3);
+    }
+
+    /**
+     * Печатает, во сколько раз выборка с индексом быстрее выборки без него
+     *
+     * @param without время без индекса, мс
+     * @param with время с индексом, мс
+     */
+    private static void printSpeedup(long without, long with) {
+        if (with > 0) {
+            System.out.printf("Ускорение: в %.1f раз%n", (double) without / with);
+        } else {
+            System.out.println("Ускорение: с индексом < 1 мс, в разы быстрее");
+        }
     }
 }
