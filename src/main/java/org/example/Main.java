@@ -2,10 +2,17 @@ package org.example;
 import org.example.storage.Database;
 import java.io.File;
 
-//import java.util.Scanner;
-
+/**
+ * Точка входа, открывает базу в папке {@code data} и запускает консольный интерфейс
+ */
 public class Main {
-    public static void main(String[] args) throws Exception {
+
+    /**
+     * Запускает мини-СУБД
+     *
+     * @param args аргументы командной строки не используются
+     */
+    public static void main(String[] args) {
         Database db = new Database(new File("data"));
         new DatabaseCli(db).start();
     }

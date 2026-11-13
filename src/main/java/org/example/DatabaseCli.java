@@ -8,8 +8,8 @@ import java.util.List;
 import java.util.Scanner;
 
 /**
- * Консольный интерфейс мини-СУБД.
- * Читает SQL-команды пользователя в цикле и выводит результат
+ * Консольный интерфейс мини-СУБД читает SQL-команды пользователя в цикле и выводит результат
+ *
  */
 public class DatabaseCli {
 
@@ -26,7 +26,7 @@ public class DatabaseCli {
     }
 
     /**
-     * Запускает цикл чтения и выполнения команд до ввода exit
+     * Запускает цикл чтения и выполнения команд до ввода {@code exit}
      */
     public void start() {
         Scanner scanner = new Scanner(System.in);
@@ -34,9 +34,13 @@ public class DatabaseCli {
 
         while (true) {
             System.out.print("db> ");
-            if (!scanner.hasNextLine()) break;
+            if (!scanner.hasNextLine()) {
+                break;
+            }
             String line = scanner.nextLine().trim();
-            if (line.isEmpty()) continue;
+            if (line.isEmpty()) {
+                continue;
+            }
             if (line.equalsIgnoreCase("exit")) {
                 System.out.println("exit");
                 break;
@@ -51,34 +55,8 @@ public class DatabaseCli {
     }
 
     /**
-     * Результат запроса в виде таблицы
-     *
-     * @param cols названия колонок (шапка таблицы)
-     * @param rows строки данных (каждая строка - список значений)
-     */
-    public void printTable(List<String> cols, List<List<Object>> rows) {
-        for (String col : cols) {
-            System.out.printf("| %-15s ", col);
-        }
-        System.out.println("|");
-
-        for (int ii = 0; ii < cols.size(); ii++) {
-            System.out.print("+-----------------");
-        }
-        System.out.println("+");
-
-        for (List<Object> row : rows) {
-            for (Object val : row) {
-                System.out.printf("| %-15s ", val == null ? "NULL" : val.toString());
-            }
-            System.out.println("|");
-        }
-
-        System.out.println("Rows count: " + rows.size());
-    }
-
-    /**
-     * Выводит результат запроса: таблицу для SELECT или сообщение для остальных команд
+     * Выводит результат запроса - таблицу для SELECT или сообщение для остальных команд
+     * Ширина столбцов подбирается по самому длинному значению
      *
      * @param result результат выполнения команды
      */
@@ -88,38 +66,48 @@ public class DatabaseCli {
             return;
         }
 
-        if (result.getColumns().isEmpty()) {
+        List<String> columns = result.getColumns();
+        if (columns.isEmpty()) {
             System.out.println(result.getMessage() + " (" + result.getExecutionTimeMs() + " мс)");
             return;
         }
 
-        List<String> cols = result.getColumns();
-        int[] w = new int[cols.size()];
-        for (int i = 0; i < cols.size(); i++) w[i] = cols.get(i).length();
+        int[] widths = new int[columns.size()];
+        for (int i = 0; i < columns.size(); i++) {
+            widths[i] = columns.get(i).length();
+        }
         for (Row row : result.getRows()) {
-            for (int i = 0; i < cols.size(); i++) {
-                Object v = row.get(cols.get(i));
-                w[i] = Math.max(w[i], (v == null ? "NULL" : v.toString()).length());
+            for (int i = 0; i < columns.size(); i++) {
+                widths[i] = Math.max(widths[i], cellText(row.get(columns.get(i))).length());
             }
         }
-        StringBuilder sep = new StringBuilder("+");
-        for (int x : w) {
-            for (int k = 0; k < x + 2; k++) sep.append('-');
-            sep.append('+');
+
+        StringBuilder separator = new StringBuilder("+");
+        for (int width : widths) {
+            for (int i = 0; i < width + 2; i++) {
+                separator.append('-');
+            }
+            separator.append('+');
         }
-        System.out.println(sep);
-        for (int i = 0; i < cols.size(); i++) System.out.printf("| %-" + w[i] + "s ", cols.get(i));
+
+        System.out.println(separator);
+        for (int i = 0; i < columns.size(); i++) {
+            System.out.printf("| %-" + widths[i] + "s ", columns.get(i));
+        }
         System.out.println("|");
-        System.out.println(sep);
+        System.out.println(separator);
         for (Row row : result.getRows()) {
-            for (int i = 0; i < cols.size(); i++) {
-                Object v = row.get(cols.get(i));
-                System.out.printf("| %-" + w[i] + "s ", v == null ? "NULL" : v.toString());
+            for (int i = 0; i < columns.size(); i++) {
+                System.out.printf("| %-" + widths[i] + "s ", cellText(row.get(columns.get(i))));
             }
             System.out.println("|");
         }
-        System.out.println(sep);
+        System.out.println(separator);
 
         System.out.println(result.getMessage() + " (" + result.getExecutionTimeMs() + " мс)");
+    }
+
+    private String cellText(Object value) {
+        return value == null ? "NULL" : value.toString();
     }
 }
