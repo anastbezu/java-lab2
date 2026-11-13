@@ -14,6 +14,11 @@ public class Main {
      */
     public static void main(String[] args) {
         Database db = new Database(new File("data"));
+
+        for (String error : db.getLoadErrors()) {
+            System.out.println("ОШИБКА: " + error);
+        }
+
         new DatabaseCli(db).start();
     }
 }

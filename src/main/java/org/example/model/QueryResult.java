@@ -29,15 +29,15 @@ public class QueryResult {
      * Результат SELECT.
      */
     public static QueryResult forSelect(List<String> columns, List<Row> rows, long executionTimeMs) {
-        return new QueryResult(true, rows.size() + " rows in set", columns, rows, rows.size(), executionTimeMs);
+        return new QueryResult(true, "Найдено строк: " + rows.size(), columns, rows, rows.size(), executionTimeMs);
     }
 
     /**
      * Результат INSERT, UPDATE или DELETE.
      */
     public static QueryResult forMutation(int affectedRows, long executionTimeMs) {
-        return new QueryResult(true, "Query OK, " + affectedRows + " rows affected",
-                new ArrayList<>(), new ArrayList<>(), affectedRows, executionTimeMs);
+        return new QueryResult(true, "Задействовано строк: " + affectedRows,
+            new ArrayList<>(), new ArrayList<>(), affectedRows, executionTimeMs);
     }
 
     /**
@@ -45,13 +45,6 @@ public class QueryResult {
      */
     public static QueryResult forDdl(String message, long executionTimeMs) {
         return new QueryResult(true, message, new ArrayList<>(), new ArrayList<>(), 0, executionTimeMs);
-    }
-
-    /**
-     * Результат с ошибкой.
-     */
-    public static QueryResult forError(String errorMessage) {
-        return new QueryResult(false, errorMessage, new ArrayList<>(), new ArrayList<>(), 0, 0);
     }
 
     public boolean isSuccess() {

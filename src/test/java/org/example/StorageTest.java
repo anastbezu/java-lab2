@@ -257,7 +257,5 @@ public class StorageTest {
         Database restarted = new Database(tempDir);
         assertEquals(Arrays.asList(1), restarted.findIndex("cars", "brand").get("M5"));
 
-        System.gc();
-        Thread.sleep(100);
     }
 }

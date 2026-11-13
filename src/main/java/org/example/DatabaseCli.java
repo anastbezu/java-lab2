@@ -61,11 +61,6 @@ public class DatabaseCli {
      * @param result результат выполнения команды
      */
     public void printResult(QueryResult result) {
-        if (!result.isSuccess()) {
-            System.out.println("ОШИБКА: " + result.getMessage());
-            return;
-        }
-
         List<String> columns = result.getColumns();
         if (columns.isEmpty()) {
             System.out.println(result.getMessage() + " (" + result.getExecutionTimeMs() + " мс)");
@@ -73,12 +68,12 @@ public class DatabaseCli {
         }
 
         int[] widths = new int[columns.size()];
-        for (int i = 0; i < columns.size(); i++) {
-            widths[i] = columns.get(i).length();
+        for (int colIdx = 0; colIdx < columns.size(); colIdx++) {
+            widths[colIdx] = columns.get(colIdx).length();
         }
         for (Row row : result.getRows()) {
-            for (int i = 0; i < columns.size(); i++) {
-                widths[i] = Math.max(widths[i], cellText(row.get(columns.get(i))).length());
+            for (int colIdx = 0; colIdx < columns.size(); colIdx++) {
+                widths[colIdx] = Math.max(widths[colIdx], cellText(row.get(columns.get(colIdx))).length());
             }
         }
 
@@ -91,14 +86,14 @@ public class DatabaseCli {
         }
 
         System.out.println(separator);
-        for (int i = 0; i < columns.size(); i++) {
-            System.out.printf("| %-" + widths[i] + "s ", columns.get(i));
+        for (int colIdx = 0; colIdx < columns.size(); colIdx++) {
+            System.out.printf("| %-" + widths[colIdx] + "s ", columns.get(colIdx));
         }
         System.out.println("|");
         System.out.println(separator);
         for (Row row : result.getRows()) {
-            for (int i = 0; i < columns.size(); i++) {
-                System.out.printf("| %-" + widths[i] + "s ", cellText(row.get(columns.get(i))));
+            for (int colIdx = 0; colIdx < columns.size(); colIdx++) {
+                System.out.printf("| %-" + widths[colIdx] + "s ", cellText(row.get(columns.get(colIdx))));
             }
             System.out.println("|");
         }
