@@ -3,6 +3,8 @@ package org.example;
 import org.example.model.QueryResult;
 import org.example.model.Row;
 import org.example.storage.Database;
+
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.function.Predicate;
@@ -53,6 +55,17 @@ public class SelectCommand implements QueryCommand {
     @Override
     public QueryResult execute(Database db) throws Exception {
         long start = System.currentTimeMillis();
+
+        // раскрываем * в реальные столбцы таблицы
+        List<String> cols = new ArrayList<>();
+        if (columns.length == 1 && columns[0].equals("*")) {
+            for (Column c : db.getTable(tableName).getSchema().getColumns()) {
+                cols.add(c.getName());
+            }
+        } else {
+            cols.addAll(Arrays.asList(columns));
+        }
+
         List<Row> rows;
         if (whereClause != null) {
             String[] parts = whereClause.trim().split("\\s+");
@@ -62,17 +75,16 @@ public class SelectCommand implements QueryCommand {
                     throw new IllegalArgumentException("Столбец не найден: " + parts[0]);
                 }
                 Object value = column.getType().parse(parts[2]);
-                rows = db.selectEquals(tableName, parts[0], value, Arrays.asList(columns));
+                rows = db.selectEquals(tableName, parts[0], value, cols);
+            } else {
+                rows = db.select(tableName, cols, condition);
             }
-            else {
-                rows = db.select(tableName, Arrays.asList(columns), condition);
-            }
+        } else {
+            rows = db.select(tableName, cols, condition);
         }
-        else {
-            rows = db.select(tableName, Arrays.asList(columns), condition);
-        }
+
         long executionTimeMs = System.currentTimeMillis() - start;
-        return QueryResult.forSelect(Arrays.asList(columns), rows, executionTimeMs);
+        return QueryResult.forSelect(cols, rows, executionTimeMs);
     }
 
 }

@@ -7,6 +7,7 @@ import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.example.model.Column;
 import org.example.model.DataType;
+import org.example.model.Row;
 import org.example.model.TableSchema;
 import java.util.ArrayList;
 /**
