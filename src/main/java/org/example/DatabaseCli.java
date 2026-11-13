@@ -1,5 +1,9 @@
 package org.example;
 
+import org.example.model.QueryResult;
+import org.example.model.Row;
+
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Scanner;
 
@@ -13,6 +17,7 @@ import java.util.Scanner;
 public class DatabaseCli {
     public void start() {
         Scanner scanner = new Scanner(System.in);
+
 
 
         while (true) {
@@ -33,6 +38,9 @@ public class DatabaseCli {
 
                 System.out.println("error: " + e.getMessage());
             }
+
+
+
         }
     }
 
@@ -66,5 +74,43 @@ public class DatabaseCli {
         System.out.println("Rows count: " + rows.size() );
 
 
+    }
+
+    public void printResult(QueryResult result) {
+        if (!result.isSuccess()) {
+            System.out.println("ОШИБКА: " + result.getMessage());
+            return;
+        }
+
+        if (result.getColumns().isEmpty()) {
+            System.out.println(result.getMessage() + " (" + result.getExecutionTimeMs() + " мс)");
+            return;
+        }
+
+        // сюда позже добавим вывод таблицы для SELECT
+
+        // 1. шапка
+        for (String col : result.getColumns()) {
+            System.out.printf("| %-15s ", col);
+        }
+        System.out.println("|");
+
+        // 2. линия
+        for (int i = 0; i < result.getColumns().size(); i++) {
+            System.out.print("+-----------------");
+        }
+        System.out.println("+");
+
+        // 3. строки данных
+        for (Row row : result.getRows()) {
+            for (String col : result.getColumns()) {
+                Object val = row.get(col);
+                System.out.printf("| %-15s ", val == null ? "NULL" : val.toString());
+            }
+            System.out.println("|");
+        }
+
+        // 4. итог
+        System.out.println(result.getMessage() + " (" + result.getExecutionTimeMs() + " мс)");
     }
 }
