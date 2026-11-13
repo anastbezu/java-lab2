@@ -1,14 +1,17 @@
 package org.example;
+import java.math.BigDecimal;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.function.Predicate;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import org.example.model.Column;
 import org.example.model.DataType;
+import org.example.model.Row;
 import org.example.model.TableSchema;
-import java.util.ArrayList;
 /**
  * Разбирает SQL-запросы и создаёт соответствующие команды
  * для их последующего выполнения.
@@ -23,33 +26,38 @@ public class SqlParser {
      *
      * @param sql SQL-запрос пользователя
      * @return объект команды для выполнения запроса
-     * @throws Exception если запрос некорректен или неизвестен
      */
-    public QueryCommand parse(String sql) throws Exception {
+    public QueryCommand parse(String sql) {
+        if (sql == null || sql.isBlank()) {
+            throw new SqlException("SQL-запрос не может быть пустым");
+        }
         sql = sql.trim().replaceAll(";+$", "");
-        String upper = sql.toUpperCase();
-        if (upper.startsWith("SELECT")) {
+        if (sql.isBlank()) {
+            throw new SqlException("SQL-запрос не может быть пустым");
+        }
+        String upper = sql.toUpperCase(Locale.ROOT);
+        if (upper.startsWith("SELECT ")) {
             return parseSelect(sql);
         }
-        if (upper.startsWith("INSERT INTO")) {
+        if (upper.startsWith("INSERT INTO ")) {
             return parseInsert(sql);
         }
-        if (upper.startsWith("UPDATE")) {
+        if (upper.startsWith("UPDATE ")) {
             return parseUpdate(sql);
         }
-        if (upper.startsWith("DELETE FROM")) {
+        if (upper.startsWith("DELETE FROM ")) {
             return parseDelete(sql);
         }
-        if (upper.startsWith("CREATE INDEX")) {
+        if (upper.startsWith("CREATE INDEX ")) {
             return parseCreateIndex(sql);
         }
-        if (upper.startsWith("CREATE TABLE")) {
+        if (upper.startsWith("CREATE TABLE ")) {
             return parseCreateTable(sql);
         }
-        if (upper.startsWith("DROP TABLE")) {
+        if (upper.startsWith("DROP TABLE ")) {
             return parseDropTable(sql);
         }
-        throw new IllegalArgumentException("Неизвестная команда!");
+        throw new SqlException("Неизвестная команда!");
     }
     /**
      * Разбирает SELECT-запрос, извлекает название таблицы,
@@ -57,156 +65,231 @@ public class SqlParser {
      *
      * @param sql SQL-запрос SELECT
      * @return команда SelectCommand
-     * @throws Exception если запрос имеет неправильный формат
      */
-    private QueryCommand parseSelect(String sql) throws Exception {
-        String[] upperParts = sql.toUpperCase().split("\\s+");
-        String[] parts = sql.trim().split("\\s+");
-        int fromIndex = Arrays.asList(upperParts).indexOf("FROM");
-        int whereIndex = Arrays.asList(upperParts).indexOf("WHERE");
-        int selectIndex = Arrays.asList(upperParts).indexOf("SELECT");
-        int endIndex = whereIndex != -1 ? whereIndex : parts.length;
-        if (Arrays.asList(upperParts).lastIndexOf("SELECT") != selectIndex) {
-            throw new IllegalArgumentException("Более одного SELECT не может быть в запросе");
+    private QueryCommand parseSelect(String sql) {
+        String text = sql.trim();
+        if (!text.regionMatches(true, 0, "SELECT", 0, 6)) {
+            throw new SqlException("Ожидалось SELECT");
         }
-        if (selectIndex != 0) {
-            throw new IllegalArgumentException("SELECT должен стоять в начале запроса");
-        }
+        int fromIndex = indexOfKeywordOutsideQuotes(text, "FROM", 6);
         if (fromIndex == -1) {
-            throw new IllegalArgumentException("Отсутствует FROM");
+            throw new SqlException("Отсутствует FROM");
         }
-        if (Arrays.asList(upperParts).lastIndexOf("FROM") != fromIndex) {
-            throw new IllegalArgumentException("Более одного FROM не может быть в запросе");
+        if (indexOfKeywordOutsideQuotes(text, "FROM", fromIndex + 4) != -1) {
+            throw new SqlException("Более одного FROM не может быть в запросе");
         }
-        if (whereIndex != -1 && whereIndex <= fromIndex) {
-            throw new IllegalArgumentException("WHERE не может стоять раньше FROM");
+        int whereIndex = indexOfKeywordOutsideQuotes(text, "WHERE", fromIndex + 4);
+        if (whereIndex != -1 && indexOfKeywordOutsideQuotes(text, "WHERE", whereIndex + 5) != -1) {
+            throw new SqlException("Более одного WHERE не может быть в запросе");
         }
-        if (fromIndex + 1 >= endIndex) {
-            throw new IllegalArgumentException("Не введено имя таблицы");
+        String columnsText = text.substring(6, fromIndex).trim();
+        String tableText = whereIndex == -1 ? text.substring(fromIndex + 4).trim() : text.substring(fromIndex + 4, whereIndex).trim();
+        if (columnsText.isEmpty()) {
+            throw new SqlException("Столбцы не указаны");
         }
-        if (endIndex - fromIndex - 1 != 1) {
-            throw new IllegalArgumentException("Введено что-то после названия таблицы");
+        if (tableText.isEmpty()) {
+            throw new SqlException("Не введено имя таблицы");
         }
-        if (Arrays.asList(upperParts).lastIndexOf("WHERE") != whereIndex) {
-            throw new IllegalArgumentException("Более одного WHERE не может быть в запросе");
+        if (tableText.split("\\s+").length != 1) {
+            throw new SqlException("Введено что-то после названия таблицы");
         }
-        String tableName = parts[fromIndex + 1];
-        String[] fields = Arrays.copyOfRange(parts, 1, fromIndex);
-        if (fields.length == 0) {
-            throw new IllegalArgumentException("Столбцы не указаны");
-        }
-        for (int i = 0; i < fields.length - 1; i++) {
-            if (!fields[i].endsWith(",")) {
-                throw new IllegalArgumentException("Пользователь не ввел запятую!");
-            }
-        }
-        if (fields[fields.length - 1].endsWith(",")) {
-            throw new IllegalArgumentException("В конце последнего столбца есть запятая");
-        }
-        String columnsText = String.join(" ", fields);
-        String[] columns = columnsText.split(",");
+        String tableName = tableText;
+        List<String> parsedColumns = splitByCommaOutsideQuotes(columnsText);
+        String[] columns = new String[parsedColumns.size()];
         HashSet<String> uniqueColumns = new HashSet<>();
-        for (int i = 0; i < columns.length; i++) {
-            columns[i] = columns[i].trim();
+        for (int i = 0; i < parsedColumns.size(); i++) {
+            columns[i] = parsedColumns.get(i).trim();
             if (columns[i].isEmpty()) {
-                throw new IllegalArgumentException("Есть пустые столбцы");
+                throw new SqlException("Есть пустые столбцы");
             }
-            if (!uniqueColumns.add(columns[i].toLowerCase())) {
-                throw new IllegalArgumentException("Есть повторяющиеся столбцы");
+            if (!uniqueColumns.add(columns[i].toLowerCase(Locale.ROOT))) {
+                throw new SqlException("Есть повторяющиеся столбцы");
             }
         }
         if (Arrays.asList(columns).contains("*") && columns.length > 1) {
-            throw new IllegalArgumentException("Звездочка может быть единственным столбцом");
+            throw new SqlException("Звездочка может быть единственным столбцом");
         }
-        String condText = null;
+        String conditionText = null;
         Predicate<Row> condition = null;
         if (whereIndex != -1) {
-            String[] cond = Arrays.copyOfRange(parts, whereIndex + 1, parts.length);
-            condText = String.join(" ", cond);
-            validateWhere(condText);
-            condition = parseWhere(condText);
+            conditionText = text.substring(whereIndex + 5).trim();
+            validateWhere(conditionText);
+            condition = parseWhere(conditionText);
         }
-        return new SelectCommand(tableName, columns, condition, condText);
+        return new SelectCommand(tableName, columns, condition, conditionText);
     }
     /**
      * Разбирает INSERT-запрос и извлекает название таблицы,
      * значения и, при наличии, названия столбцов.
+     * Поддерживает вставку нескольких записей.
      *
      * @param sql SQL-запрос INSERT
      * @return команда InsertCommand
-     * @throws Exception если запрос имеет неправильный формат
      */
-    private QueryCommand parseInsert(String sql) throws Exception {
-        String[] parts = sql.trim().split("\\s+", 4);
-        if (parts.length != 4) {
-            throw new IllegalArgumentException("Неверный формат INSERT");
+    private QueryCommand parseInsert(String sql) {
+        Pattern pattern = Pattern.compile("(?is)^INSERT\\s+INTO\\s+([A-Za-z_]\\w*)\\s+(.*)$");
+        Matcher matcher = pattern.matcher(sql.trim());
+        if (!matcher.matches()) {
+            throw new SqlException("Неверный формат INSERT");
         }
-        if (!(parts[0].equalsIgnoreCase("INSERT") && parts[1].equalsIgnoreCase("INTO"))) {
-            throw new IllegalArgumentException("Некорректный ввод INSERT");
-        }
-        if (parts[2].isBlank()) {
-            throw new IllegalArgumentException("Не указано имя таблицы");
-        }
-        String tableName = parts[2];
+        String tableName = matcher.group(1);
+        String rest = matcher.group(2).trim();
         String[] columns = null;
-        String rest = parts[3].trim();
-
         if (rest.startsWith("(")) {
             int closeIndex = rest.indexOf(")");
-
             if (closeIndex == -1) {
-                throw new IllegalArgumentException("Не закрыты скобки колонок");
+                throw new SqlException("Не закрыты скобки колонок");
             }
-
             String columnsText = rest.substring(1, closeIndex);
-            columns = columnsText.split(",", -1);
-
+            List<String> parsedColumns = splitByCommaOutsideQuotes(columnsText);
+            columns = new String[parsedColumns.size()];
+            HashSet<String> uniqueColumns = new HashSet<>();
             for (int i = 0; i < columns.length; i++) {
-                columns[i] = columns[i].trim();
+                columns[i] = parsedColumns.get(i).trim();
+                if (columns[i].isEmpty()) {
+                    throw new SqlException("Пустое имя столбца");
+                }
+                if (!uniqueColumns.add(columns[i].toLowerCase(Locale.ROOT))) {
+                    throw new SqlException("Повторяющиеся столбцы");
+                }
             }
-
             rest = rest.substring(closeIndex + 1).trim();
         }
-        if (!rest.toUpperCase().matches("VALUES\\s*\\(.*")) {
-            throw new IllegalArgumentException("Ожидалось VALUES");
+        Matcher valuesMatcher = Pattern.compile("(?is)^VALUES\\b\\s*(.*)$").matcher(rest);
+        if (!valuesMatcher.matches()) {
+            throw new SqlException("Ожидалось VALUES");
         }
-
-        String valuesText = rest.substring(6).trim();
-
-        if (!valuesText.startsWith("(") || !valuesText.endsWith(")")) {
-            throw new IllegalArgumentException("Неверный формат значений");
-        }
-
-        valuesText = valuesText.substring(1, valuesText.length() - 1);
-        String[] values = valuesText.split(",", -1);
-        if (columns != null && columns.length != values.length) {
-            throw new IllegalArgumentException("Количество колонок не совпадает с количеством значений");
-        }
-        for (String value : values) {
-            if (value.trim().isEmpty()) {
-                throw new IllegalArgumentException("Пустое значение");
+        String valuesText = valuesMatcher.group(1).trim();
+        List<String> valueGroups = splitValueGroups(valuesText);
+        List<String[]> rowsValues = new ArrayList<>();
+        for (String group : valueGroups) {
+            List<String> parsedValues = splitByCommaOutsideQuotes(group);
+            String[] values = new String[parsedValues.size()];
+            for (int i = 0; i < values.length; i++) {
+                values[i] = normalizeSqlValue(parsedValues.get(i));
             }
-        }
-        if (columns != null) {
-            if (columns.length == 0) {
-                throw new IllegalArgumentException("Не указаны колонки");
+            if (columns != null && columns.length != values.length) {
+                throw new SqlException("Количество колонок не совпадает с количеством значений");
             }
-            for (String column : columns) {
-                if (column == null || column.isBlank()) {
-                    throw new IllegalArgumentException("Пустое имя колонки");
+            rowsValues.add(values);
+        }
+        return new InsertCommand(tableName, rowsValues, columns);
+    }
+    /**
+     * Разделяет группы значений INSERT, учитывая скобки и кавычки.
+     *
+     * @param text текст со значениями INSERT
+     * @return список групп значений
+     */
+    private List<String> splitValueGroups(String text) {
+        List<String> groups = new ArrayList<>();
+        int i = 0;
+        while (i < text.length()) {
+            while (i < text.length() && Character.isWhitespace(text.charAt(i))) {
+                i++;
+            }
+            if (i >= text.length() || text.charAt(i) != '(') {
+                throw new SqlException("Ожидалась открывающая скобка");
+            }
+            int start = ++i;
+            int depth = 1;
+            boolean inQuotes = false;
+            while (i < text.length() && depth > 0) {
+                char ch = text.charAt(i);
+                if (ch == '\'') {
+                    if (inQuotes && i + 1 < text.length()
+                            && text.charAt(i + 1) == '\'') {
+                        i += 2;
+                        continue;
+                    }
+                    inQuotes = !inQuotes;
+                }
+                else if (!inQuotes) {
+                    if (ch == '(') {
+                        depth++;
+                    }
+                    else if (ch == ')') {
+                        depth--;
+                    }
+                }
+                i++;
+            }
+            if (depth != 0 || inQuotes) {
+                throw new SqlException("Неправильные скобки или кавычки");
+            }
+            groups.add(text.substring(start, i - 1).trim());
+            while (i < text.length() && Character.isWhitespace(text.charAt(i))) {
+                i++;
+            }
+            if (i < text.length()) {
+                if (text.charAt(i) != ',') {
+                    throw new SqlException("Ожидалась запятая между записями");
+                }
+                i++;
+                if (i >= text.length()) {
+                    throw new SqlException("После запятой отсутствует запись");
                 }
             }
         }
-        for (int i = 0; i < values.length ; i++) {
-            values[i] = values[i].trim();
-            if (values[i].startsWith("'") && values[i].endsWith("'")) {
-                values[i] = values[i].substring(1, values[i].length()-1);
+        if (groups.isEmpty()) {
+            throw new SqlException("Не указаны записи для INSERT");
+        }
+        return groups;
+    }
+    /**
+     * Разделяет строку по запятым, не затрагивая запятые внутри кавычек.
+     *
+     * @param text исходный текст
+     * @return список частей строки
+     */
+    private List<String> splitByCommaOutsideQuotes(String text) {
+        List<String> result = new ArrayList<>();
+        StringBuilder current = new StringBuilder();
+        boolean inQuotes = false;
+        for (int i = 0; i < text.length(); i++) {
+            char ch = text.charAt(i);
+            if (ch == '\'') {
+                if (inQuotes && i + 1 < text.length() && text.charAt(i + 1) == '\'') {
+                    current.append("''");
+                    i++;
+                    continue;
+                }
+                inQuotes = !inQuotes;
+                current.append(ch);
             }
-            if (values[i].startsWith("'") || values[i].endsWith("'")) {
-                throw new IllegalArgumentException("Незакрытые кавычки в значении");
+            else if (ch == ',' && !inQuotes) {
+                result.add(current.toString().trim());
+                current.setLength(0);
+            }
+            else {
+                current.append(ch);
             }
         }
-        return new InsertCommand(tableName, values, columns);
+        if (inQuotes) {
+            throw new SqlException("Незакрытые кавычки");
+        }
+        result.add(current.toString().trim());
+        return result;
+    }
+    /**
+     * Удаляет внешние кавычки из SQL-значения
+     * и обрабатывает экранированные одинарные кавычки.
+     *
+     * @param value исходное значение
+     * @return нормализованное значение
+     */
+    private static String normalizeSqlValue(String value) {
+        String result = value.trim();
+        if (result.isEmpty()) {
+            throw new SqlException("Пустое значение");
+        }
+        if (result.startsWith("'") && result.endsWith("'") && result.length() >= 2) {
+            return result.substring(1, result.length() - 1).replace("''", "'");
+        }
+        if (result.startsWith("'") || result.endsWith("'")) {
+            throw new SqlException("Незакрытые кавычки");
+        }
+        return result;
     }
     /**
      * Разбирает UPDATE-запрос, извлекает таблицу,
@@ -214,34 +297,37 @@ public class SqlParser {
      *
      * @param sql SQL-запрос UPDATE
      * @return команда UpdateCommand
-     * @throws Exception если запрос имеет неправильный формат
      */
-    private QueryCommand parseUpdate(String sql) throws Exception {
-        String[] parts = sql.split("\\s+", 4);
-        if (parts.length != 4) {
-            throw new IllegalArgumentException("Неверный формат UPDATE");
+    private QueryCommand parseUpdate(String sql) {
+        Matcher matcher = Pattern.compile("(?is)^UPDATE\\s+([A-Za-z_]\\w*)\\s+SET\\s+(.*)$").matcher(sql.trim());
+        if (!matcher.matches()) {
+            throw new SqlException("Неверный формат UPDATE");
         }
-        if (!(parts[0].equalsIgnoreCase("UPDATE"))) {
-            throw new IllegalArgumentException("Ожидалось UPDATE");
+        String tableName = matcher.group(1);
+        String rest = matcher.group(2).trim();
+        int whereIndex = indexOfKeywordOutsideQuotes(rest, "WHERE", 0);
+        if (whereIndex == -1) {
+            throw new SqlException("Отсутствует WHERE");
         }
-        if (!(parts[2].equalsIgnoreCase("SET"))) {
-            throw new IllegalArgumentException("Ожидалось SET");
+        if (indexOfKeywordOutsideQuotes(rest, "WHERE", whereIndex + 5) != -1) {
+            throw new SqlException("Более одного WHERE не может быть в запросе");
         }
-        String tableName = parts[1];
-        String[] updateParts = parts[3].split("(?i)\\s+WHERE\\s+", 2);
-        if (updateParts.length != 2 || updateParts[0].isBlank() || updateParts[1].isBlank()) {
-            throw new IllegalArgumentException("Некорректный формат WHERE");
+        String assignment = rest.substring(0, whereIndex).trim();
+        String conditionText = rest.substring(whereIndex + 5).trim();
+        int equalsIndex = indexOfOperatorOutsideQuotes(assignment, "=");
+        if (equalsIndex == -1) {
+            throw new SqlException("Некорректное присваивание в SET");
         }
-        String[] assignmentParts = updateParts[0].split("=", 2);
-        if (assignmentParts.length != 2 || assignmentParts[0].isBlank() ||  assignmentParts[1].isBlank()) {
-            throw new IllegalArgumentException("Некорректное присваивание в SET");
+        String columnName = assignment.substring(0, equalsIndex).trim();
+        String newValue = assignment.substring(equalsIndex + 1).trim();
+        if (columnName.isEmpty() || newValue.isEmpty()) {
+            throw new SqlException("Некорректное присваивание в SET");
         }
-        String columnName = assignmentParts[0].trim();
-        String newValue = assignmentParts[1].trim();
-        String conditionText = updateParts[1].trim();
+        newValue = normalizeSqlValue(newValue);
         validateWhere(conditionText);
         Predicate<Row> condition = parseWhere(conditionText);
-        return new UpdateCommand(tableName, columnName, newValue, condition);
+        String[] conditionParts = parseConditionParts(conditionText);
+        return new UpdateCommand(tableName, columnName, newValue, condition, conditionParts[0], conditionParts[1]);
     }
     /**
      * Разбирает DELETE-запрос, извлекает название таблицы
@@ -249,59 +335,112 @@ public class SqlParser {
      *
      * @param sql SQL-запрос DELETE
      * @return команда DeleteCommand
-     * @throws Exception если запрос имеет неправильный формат
      */
-    private QueryCommand parseDelete(String sql) throws Exception {
-        String[] parts = sql.trim().split("\\s+", 4);
-        if (parts.length != 4) {
-            throw new IllegalArgumentException("Неверный формат DELETE");
+    private QueryCommand parseDelete(String sql) {
+        Matcher matcher = Pattern.compile("(?is)^DELETE\\s+FROM\\s+([A-Za-z_]\\w*)\\s+WHERE\\s+(.+)$").matcher(sql.trim());
+        if (!matcher.matches()) {
+            throw new SqlException("Неверный формат DELETE");
         }
-        if (!(parts[0].equalsIgnoreCase("DELETE"))) {
-            throw new IllegalArgumentException("Ожидалось DELETE");
-        }
-        if (!(parts[1].equalsIgnoreCase("FROM"))) {
-            throw new IllegalArgumentException("Ожидалось FROM");
-        }
-        if (parts[2].isBlank()) {
-            throw new IllegalArgumentException("Не указано имя таблицы");
-        }
-        String[] whereParts = parts[3].trim().split("\\s+", 2);
-        if (whereParts.length != 2 || !whereParts[0].equalsIgnoreCase("WHERE")) {
-            throw new IllegalArgumentException("Ожидалось WHERE и условие");
-        }
-        String conditionText = whereParts[1].trim();
+        String tableName = matcher.group(1);
+        String conditionText = matcher.group(2).trim();
         validateWhere(conditionText);
-        Predicate <Row> condition = parseWhere(conditionText);
-        String tableName = parts[2];
-        return new DeleteCommand(tableName, condition);
+        Predicate<Row> condition = parseWhere(conditionText);
+        String[] conditionParts = parseConditionParts(conditionText);
+        return new DeleteCommand(tableName, condition, conditionParts[0], conditionParts[1]);
     }
     /**
      * Проверяет формат условия WHERE:
-     * наличие трёх частей, допустимость оператора
-     * и числовое значение для операторов сравнения.
+     * наличие столбца, оператора и значения.
      *
      * @param whereClause текст условия WHERE
-     * @throws IllegalArgumentException если условие составлено неправильно
      */
     private void validateWhere(String whereClause) {
-        if (whereClause == null || whereClause.isBlank()) {
-            throw new IllegalArgumentException("WHERE не указан");
-        }
-        String[] condition = whereClause.trim().split("\\s+");
-        if (condition.length != 3) {
-            throw new IllegalArgumentException("Неверное условие WHERE");
-        }
-        if (!(Arrays.asList(">", "<", "!=", "=").contains(condition[1]))) {
-            throw new IllegalArgumentException("Неверное условие WHERE");
+        String[] condition = parseConditionParts(whereClause);
+        if (!Arrays.asList(">", "<", "!=", "=").contains(condition[1])) {
+            throw new SqlException("Неверный оператор WHERE");
         }
         if (condition[1].equals(">") || condition[1].equals("<")) {
             try {
-                Double.parseDouble(condition[2].replace("'", ""));
+                new BigDecimal(condition[2]);
             } catch (NumberFormatException e) {
-                throw new IllegalArgumentException(
-                        "Для операторов > и < нужно числовое значение"
-                );
+                throw new SqlException("Для операторов > и < нужно числовое значение");
             }
+        }
+    }
+    /**
+     * Разбирает условие WHERE на имя столбца, оператор и значение.
+     * Операторы внутри строковых значений игнорируются.
+     *
+     * @param whereClause текст условия WHERE
+     * @return массив из имени столбца, оператора и значения
+     */
+    static String[] parseConditionParts(String whereClause) {
+        if (whereClause == null || whereClause.isBlank()) {
+            throw new SqlException("WHERE не указан");
+        }
+        String text = whereClause.trim();
+        boolean inQuotes = false;
+        int operatorIndex = -1;
+        String operator = null;
+        for (int i = 0; i < text.length(); i++) {
+            char ch = text.charAt(i);
+            if (ch == '\'') {
+                if (inQuotes && i + 1 < text.length() && text.charAt(i + 1) == '\'') {
+                    i++;
+                    continue;
+                }
+                inQuotes = !inQuotes;
+                continue;
+            }
+            if (!inQuotes) {
+                String currentOperator = null;
+                if (ch == '!' && i + 1 < text.length() && text.charAt(i + 1) == '=') {
+                    currentOperator = "!=";
+                    i++;
+                } else if (ch == '=' || ch == '>' || ch == '<') {
+                    currentOperator = String.valueOf(ch);
+                }
+                if (currentOperator != null) {
+                    if (operatorIndex != -1) {
+                        throw new SqlException("В WHERE слишком много операторов");
+                    }
+                    operatorIndex = currentOperator.equals("!=") ? i - 1 : i;
+                    operator = currentOperator;
+                }
+            }
+        }
+        if (inQuotes) {
+            throw new SqlException("Незакрытые кавычки в WHERE");
+        }
+        if (operatorIndex == -1) {
+            throw new SqlException("Неверное условие WHERE");
+        }
+        String column = text.substring(0, operatorIndex).trim();
+        String value = text.substring(operatorIndex + operator.length()).trim();
+        if (!column.matches("[A-Za-z_]\\w*") || value.isEmpty()) {
+            throw new SqlException("Неверное условие WHERE");
+        }
+        return new String[]{column, operator, normalizeSqlValue(value)};
+    }
+    /**
+     * Сравнивает два значения с учётом оператора WHERE.
+     *
+     * @param comparison результат сравнения значений
+     * @param operator оператор сравнения
+     * @return результат проверки условия
+     */
+    private static boolean compareValues(int comparison, String operator) {
+        switch (operator) {
+            case "=":
+                return comparison == 0;
+            case "!=":
+                return comparison != 0;
+            case ">":
+                return comparison > 0;
+            case "<":
+                return comparison < 0;
+            default:
+                return false;
         }
     }
     /**
@@ -311,19 +450,99 @@ public class SqlParser {
      * @return Predicate, проверяющий соответствие строки условию
      */
     public static Predicate<Row> parseWhere(String whereClause) {
-        String[] parts = whereClause.trim().split("\\s+");
-        String col = parts[0];
-        String op = parts[1];
-        String rawVal = parts[2].replace("'", "");
+        String[] parts = parseConditionParts(whereClause);
+        String column = parts[0];
+        String operator = parts[1];
+        String value = parts[2];
         return row -> {
-            Object cell = row.get(col);
-            if (cell == null) return false;
-            if (op.equals("=")) return cell.toString().equals(rawVal);
-            if (op.equals("!=")) return !cell.toString().equals(rawVal);
-            if (op.equals(">")) return Double.parseDouble(cell.toString()) > Double.parseDouble(rawVal);
-            if (op.equals("<")) return Double.parseDouble(cell.toString()) < Double.parseDouble(rawVal);
-            return false;
+            Object cell = row.get(column);
+            if (cell == null) {
+                return false;
+            }
+            if (cell instanceof Number) {
+                int comparison;
+                try {
+                    comparison = new BigDecimal(cell.toString()).compareTo(new BigDecimal(value));
+                } catch (NumberFormatException e) {
+                    throw new SqlException("Некорректное числовое значение: " + value);
+                }
+                return compareValues(comparison, operator);
+            }
+            if (cell instanceof Boolean) {
+                if (!value.equalsIgnoreCase("true") && !value.equalsIgnoreCase("false")) {
+                    throw new SqlException("Для Boolean нужно TRUE или FALSE");
+                }
+                if (operator.equals(">") || operator.equals("<")) {
+                    throw new SqlException("Для Boolean нельзя использовать > и <");
+                }
+                boolean expected = Boolean.parseBoolean(value);
+                return operator.equals("=") ? cell.equals(expected) : !cell.equals(expected);
+            }
+            if (operator.equals(">") || operator.equals("<")) {
+                throw new SqlException("Операторы > и < нельзя использовать со строками");
+            }
+            int comparison = cell.toString().compareTo(value);
+            return compareValues(comparison, operator);
         };
+    }
+    /**
+     * Находит ключевое слово SQL вне одинарных кавычек.
+     *
+     * @param text исходный текст
+     * @param keyword искомое ключевое слово
+     * @param fromIndex позиция начала поиска
+     * @return индекс начала ключевого слова или -1
+     */
+    private static int indexOfKeywordOutsideQuotes(String text, String keyword, int fromIndex) {
+        boolean inQuotes = false;
+        for (int i = 0; i <= text.length() - keyword.length(); i++) {
+            char ch = text.charAt(i);
+            if (ch == '\'') {
+                if (inQuotes && i + 1 < text.length() && text.charAt(i + 1) == '\'') {
+                    i++;
+                    continue;
+                }
+                inQuotes = !inQuotes;
+                continue;
+            }
+            if (i < fromIndex || inQuotes) {
+                continue;
+            }
+            if (text.regionMatches(true, i, keyword, 0, keyword.length())) {
+                boolean leftBoundary = i == 0 || !Character.isLetterOrDigit(text.charAt(i - 1)) && text.charAt(i - 1) != '_';
+                int end = i + keyword.length();
+                boolean rightBoundary = end >= text.length() || !Character.isLetterOrDigit(text.charAt(end)) && text.charAt(end) != '_';
+                if (leftBoundary && rightBoundary) {
+                    return i;
+                }
+            }
+        }
+        return -1;
+    }
+    /**
+     * Находит оператор вне одинарных кавычек.
+     *
+     * @param text исходный текст
+     * @param operator искомый оператор
+     * @return индекс оператора или -1
+     */
+    private static int indexOfOperatorOutsideQuotes(String text, String operator) {
+        boolean inQuotes = false;
+        for (int i = 0; i <= text.length() - operator.length(); i++) {
+            char ch = text.charAt(i);
+            if (ch == '\'') {
+                if (inQuotes && i + 1 < text.length() && text.charAt(i + 1) == '\'') {
+                    i++;
+                    continue;
+                }
+                inQuotes = !inQuotes;
+                continue;
+            }
+            if (!inQuotes && text.startsWith(operator, i)) {
+                return i;
+            }
+        }
+        return -1;
     }
     /**
      * Разбирает CREATE INDEX и извлекает имя индекса,
@@ -332,11 +551,11 @@ public class SqlParser {
      * @param sql SQL-запрос CREATE INDEX
      * @return команда CreateIndexCommand
      */
-    private QueryCommand parseCreateIndex (String sql) {
+    private QueryCommand parseCreateIndex(String sql) {
         Pattern pattern = Pattern.compile("(?i)^CREATE\\s+INDEX\\s+(\\w+)\\s+ON\\s+(\\w+)\\s*\\(\\s*(\\w+)\\s*\\)$");
         Matcher matcher = pattern.matcher(sql.trim());
-        if (!(matcher.matches())) {
-            throw new IllegalArgumentException("Неверный формат CREATE INDEX");
+        if (!matcher.matches()) {
+            throw new SqlException("Неверный формат CREATE INDEX");
         }
         String indexName = matcher.group(1);
         String tableName = matcher.group(2);
@@ -345,7 +564,7 @@ public class SqlParser {
     }
     /**
      * Разбирает CREATE TABLE, извлекает название таблицы,
-     * описания столбцов, их типы и информацию о первичном ключе.
+     * описания столбцов, их типы и информацию о ключах.
      *
      * @param sql SQL-запрос CREATE TABLE
      * @return команда CreateTableCommand
@@ -355,48 +574,66 @@ public class SqlParser {
         int openIndex = query.indexOf("(");
         int closeIndex = query.lastIndexOf(")");
         if (openIndex == -1 || closeIndex == -1 || openIndex > closeIndex) {
-            throw new IllegalArgumentException("Неверный формат CREATE TABLE");
+            throw new SqlException("Неверный формат CREATE TABLE");
         }
-        if (!(query.substring(closeIndex + 1).trim().isEmpty())) {
-            throw new IllegalArgumentException("Лишний текст после CREATE TABLE");
+        if (!query.substring(closeIndex + 1).trim().isEmpty()) {
+            throw new SqlException("Лишний текст после CREATE TABLE");
         }
         String header = query.substring(0, openIndex).trim();
         String[] headerParts = header.split("\\s+");
-        if (headerParts.length != 3 || !(headerParts[0].equalsIgnoreCase("CREATE")) || !(headerParts[1].equalsIgnoreCase("TABLE"))) {
-            throw new IllegalArgumentException("Неверное объявление CREATE TABLE");
+        if (headerParts.length != 3 || !headerParts[0].equalsIgnoreCase("CREATE") || !headerParts[1].equalsIgnoreCase("TABLE")) {
+            throw new SqlException("Неверное объявление CREATE TABLE");
         }
         String tableName = headerParts[2];
         if (!tableName.matches("[A-Za-z_]\\w*")) {
-            throw new IllegalArgumentException("Некорректное имя таблицы");
+            throw new SqlException("Некорректное имя таблицы");
         }
         String columnsText = query.substring(openIndex + 1, closeIndex);
-        String[] columnDefinitions = columnsText.split(",", -1);
+        List<String> columnDefinitions = splitByCommaOutsideQuotes(columnsText);
         List<Column> columns = new ArrayList<>();
+        HashSet<String> uniqueColumns = new HashSet<>();
         for (String definition : columnDefinitions) {
-            String[] parts = definition.trim().split("\\s+");
-            if (parts.length != 2 && parts.length != 4) {
-                throw new IllegalArgumentException("Неверное описание столбца");
-        }
+            String[] parts = definition.trim().split("\\s+", 3);
+            if (parts.length < 2) {
+                throw new SqlException("Неверное описание столбца");
+            }
             String columnName = parts[0];
             if (!columnName.matches("[A-Za-z_]\\w*")) {
-                throw new IllegalArgumentException("Некорректное имя столбца: " + columnName);
+                throw new SqlException("Некорректное имя столбца: " + columnName);
             }
-        boolean primaryKey = false;
-            if (parts.length == 4) {
-                if (!parts[2].equalsIgnoreCase("PRIMARY") ||
-                        !parts[3].equalsIgnoreCase("KEY")) {
-                    throw new IllegalArgumentException("Неверное объявление PRIMARY KEY");
-                }
-                primaryKey = true;
+            if (!uniqueColumns.add(columnName.toLowerCase(Locale.ROOT))) {
+                throw new SqlException("Повторяющийся столбец: " + columnName);
             }
             DataType type;
             try {
-                type = DataType.valueOf(parts[1].toUpperCase());
+                type = DataType.valueOf(parts[1].toUpperCase(Locale.ROOT));
+            } catch (IllegalArgumentException e) {
+                throw new SqlException("Неизвестный тип данных: " + parts[1]);
             }
-            catch (IllegalArgumentException e) {
-                throw new IllegalArgumentException("Неизвестный тип данных: " + parts[1]);
+            boolean primaryKey = false;
+            String foreignKeyTable = null;
+            String foreignKeyColumn = null;
+            String constraint = parts.length == 3 ? parts[2].trim() : "";
+            if (constraint.isEmpty()) {
+
+            } else if (constraint.equalsIgnoreCase("PRIMARY KEY")) {
+                primaryKey = true;
+            } else {
+                Matcher referenceMatcher = Pattern.compile("(?i)^REFERENCES\\s+([A-Za-z_]\\w*)\\s*\\(\\s*([A-Za-z_]\\w*)\\s*\\)$").matcher(constraint);
+                if (!referenceMatcher.matches()) {
+                    throw new SqlException("Неверное описание столбца: " + definition);
+                }
+                foreignKeyTable = referenceMatcher.group(1);
+                foreignKeyColumn = referenceMatcher.group(2);
             }
-            columns.add(new Column(columnName, type, primaryKey));
+            if (foreignKeyTable != null) {
+                columns.add(new Column(columnName, type, foreignKeyTable, foreignKeyColumn));
+            } else {
+                columns.add(new Column(columnName, type, primaryKey));
+            }
+        }
+        if (columns.isEmpty()) {
+            throw new SqlException("В таблице должен быть хотя бы один столбец");
         }
         TableSchema schema = new TableSchema(tableName, columns);
         return new CreateTableCommand(schema);
@@ -410,13 +647,10 @@ public class SqlParser {
     private QueryCommand parseDropTable(String sql) {
         Pattern pattern = Pattern.compile("(?i)^DROP\\s+TABLE\\s+(\\w+)$");
         Matcher matcher = pattern.matcher(sql.trim());
-        if (!(matcher.matches())) {
-            throw new IllegalArgumentException("Неверный формат DROP TABLE");
+        if (!matcher.matches()) {
+            throw new SqlException("Неверный формат DROP TABLE");
         }
         String tableName = matcher.group(1);
         return new DropTableCommand(tableName);
-        }
     }
-
-
-
+}
