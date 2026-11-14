@@ -1,69 +1,84 @@
 package org.example;
-
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.List;
+import org.example.exception.DatabaseException;
 import org.example.model.QueryResult;
 import org.example.model.Row;
 import org.example.model.TableSchema;
 import org.example.storage.Database;
-import java.util.Arrays;
-
 /**
- * Команда INSERT для добавления новой записи в таблицу.
- * Поддерживает добавление значений в порядке столбцов
- * или с указанием названий столбцов.
+ * Команда INSERT для добавления одной или нескольких записей в таблицу.
+ * Поддерживает вставку значений как по порядку столбцов, так и по их именам.
  */
 public class InsertCommand implements QueryCommand {
-
-    private String tableName;
-    private String[] values;
-    private String[] columns;
-
+    private final String tableName;
+    private final List<String[]> rowsValues;
+    private final String[] columns;
     /**
-     * Создаёт команду INSERT.
+     * Создаёт команду INSERT для добавления одной записи.
      *
      * @param tableName имя таблицы
-     * @param values значения для добавления
-     * @param columns названия столбцов или null, если указан порядок всех столбцов
+     * @param values значения добавляемой записи
+     * @param columns имена столбцов или null, если значения указаны по порядку
      */
     public InsertCommand(String tableName, String[] values, String[] columns) {
+        this(tableName, Collections.singletonList(values), columns);
+    }
+    /**
+     * Создаёт команду INSERT для добавления нескольких записей.
+     *
+     * @param tableName имя таблицы
+     * @param rowsValues значения добавляемых записей
+     * @param columns имена столбцов или null, если значения указаны по порядку
+     */
+    public InsertCommand(String tableName, List<String[]> rowsValues, String[] columns) {
         if (tableName == null || tableName.isBlank()) {
-            throw new IllegalArgumentException("Не указано имя таблицы");
+            throw new SqlException("Не указано имя таблицы");
         }
-        if (values == null || values.length == 0) {
-            throw new IllegalArgumentException("Не указаны значения");
+        if (rowsValues == null || rowsValues.isEmpty()) {
+            throw new SqlException("Не указаны значения");
         }
         this.tableName = tableName;
-        this.values = values.clone();
+        this.rowsValues = new ArrayList<>();
+        for (String[] values : rowsValues) {
+            if (values == null || values.length == 0) {
+                throw new SqlException("Не указаны значения");
+            }
+            this.rowsValues.add(values.clone());
+        }
+        if (columns != null && columns.length == 0) {
+            throw new SqlException("Не указаны столбцы");
+        }
         this.columns = columns == null ? null : columns.clone();
     }
-
     /**
-     * Выполняет добавление записи в таблицу.
-     * Преобразует переданные значения в соответствии со схемой таблицы.
+     * Выполняет добавление записей в таблицу.
      *
-     * @param db база данных, в которую добавляется запись
-     * @return результат выполнения операции
-     * @throws Exception если произошла ошибка при добавлении записи
+     * @param db база данных, в которую добавляются записи
+     * @return результат операции с количеством добавленных строк
+     * @throws DatabaseException если при обращении к базе данных произошла ошибка
      */
     @Override
-    public QueryResult execute(Database db) throws Exception {
+    public QueryResult execute(Database db) throws DatabaseException {
+        if (db == null) {
+            throw new SqlException("База данных не указана");
+        }
         long start = System.currentTimeMillis();
         TableSchema schema = db.getTable(tableName).getSchema();
-        Row row;
-        if (columns == null) {
-            row = schema.createRowFromPositionalValues(
-                    Arrays.asList(values)
-            );
-        } else {
-            row = schema.createRowFromNamedValues(
-                    Arrays.asList(columns),
-                    Arrays.asList(values)
-            );
+        List<Row> rows = new ArrayList<>();
+        for (String[] values : rowsValues) {
+            Row row;
+            if (columns == null) {
+                row = schema.createRowFromPositionalValues(Arrays.asList(values));
+            } else {
+                row = schema.createRowFromNamedValues(Arrays.asList(columns), Arrays.asList(values));
+            }
+            rows.add(row);
         }
-        db.insertInto(tableName, row);
-
+        int affectedRows = db.insertAll(tableName, rows);
         long executionTimeMs = System.currentTimeMillis() - start;
-
-        return QueryResult.forMutation(1, executionTimeMs);
+        return QueryResult.forMutation(affectedRows, executionTimeMs);
     }
-
 }

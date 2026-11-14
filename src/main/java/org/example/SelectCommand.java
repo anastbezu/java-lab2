@@ -1,27 +1,24 @@
 package org.example;
-
-import org.example.model.QueryResult;
-import org.example.model.Row;
-import org.example.storage.Database;
-
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 import java.util.function.Predicate;
+import org.example.exception.DatabaseException;
 import org.example.model.Column;
-
+import org.example.model.DataType;
+import org.example.model.QueryResult;
+import org.example.model.Row;
+import org.example.storage.Database;
 /**
  * Команда SELECT для получения данных из таблицы.
  * Поддерживает выбор всех столбцов или отдельных столбцов,
  * а также фильтрацию строк с помощью условия WHERE.
  */
 public class SelectCommand implements QueryCommand {
-
-    private String tableName;
-    private String[] columns;
-    private Predicate<Row> condition;
-    private String whereClause;
-
+    private final String tableName;
+    private final String[] columns;
+    private final Predicate<Row> condition;
+    private final String whereClause;
     /**
      * Создаёт команду SELECT.
      *
@@ -32,17 +29,16 @@ public class SelectCommand implements QueryCommand {
      */
     public SelectCommand(String tableName, String[] columns, Predicate<Row> condition, String whereClause) {
         if (tableName == null || tableName.isBlank()) {
-            throw new IllegalArgumentException("Не указано имя таблицы");
+            throw new SqlException("Не указано имя таблицы");
         }
         if (columns == null || columns.length == 0) {
-            throw new IllegalArgumentException("Не указаны столбцы");
+            throw new SqlException("Не указаны столбцы");
         }
         this.tableName = tableName;
         this.columns = columns.clone();
         this.condition = condition;
         this.whereClause = whereClause;
     }
-
     /**
      * Выполняет SELECT-запрос к базе данных.
      * Для условия равенства использует метод selectEquals(),
@@ -50,41 +46,42 @@ public class SelectCommand implements QueryCommand {
      *
      * @param db база данных, из которой извлекаются записи
      * @return результат SELECT-запроса
-     * @throws Exception если при выполнении запроса произошла ошибка
+     * @throws DatabaseException если при обращении к базе данных произошла ошибка
      */
     @Override
-    public QueryResult execute(Database db) throws Exception {
+    public QueryResult execute(Database db) throws DatabaseException {
+        if (db == null) {
+            throw new SqlException("База данных не указана");
+        }
         long start = System.currentTimeMillis();
-
-        // раскрываем * в реальные столбцы таблицы
-        List<String> cols = new ArrayList<>();
+        List<String> resultColumns = new ArrayList<>();
         if (columns.length == 1 && columns[0].equals("*")) {
-            for (Column c : db.getTable(tableName).getSchema().getColumns()) {
-                cols.add(c.getName());
+            for (Column column : db.getTable(tableName).getSchema().getColumns()) {
+                resultColumns.add(column.getName());
             }
         } else {
-            cols.addAll(Arrays.asList(columns));
+            resultColumns.addAll(Arrays.asList(columns));
         }
-
         List<Row> rows;
         if (whereClause != null) {
-            String[] parts = whereClause.trim().split("\\s+");
-            if (parts.length == 3 && parts[1].equals("=")) {
-                Column column = db.getTable(tableName).getSchema().getColumn(parts[0]);
-                if (column == null) {
-                    throw new IllegalArgumentException("Столбец не найден: " + parts[0]);
-                }
-                Object value = column.getType().parse(parts[2]);
-                rows = db.selectEquals(tableName, parts[0], value, cols);
+            String[] conditionParts = SqlParser.parseConditionParts(whereClause);
+            Column conditionColumn = db.getTable(tableName).getSchema().getColumn(conditionParts[0]);
+            if (conditionColumn == null) {
+                throw new SqlException("Столбец в WHERE не найден: " + conditionParts[0]);
+            }
+            if ((conditionParts[1].equals(">") || conditionParts[1].equals("<")) && conditionColumn.getType() != DataType.INT && conditionColumn.getType() != DataType.FLOAT) {
+                throw new SqlException("Операторы > и < можно использовать только с числовыми столбцами");
+            }
+            if (conditionParts[1].equals("=")) {
+                Object value = conditionColumn.getType().parse(conditionParts[2]);
+                rows = db.selectEquals(tableName, conditionColumn.getName(), value, resultColumns);
             } else {
-                rows = db.select(tableName, cols, condition);
+                rows = db.select(tableName, resultColumns, condition);
             }
         } else {
-            rows = db.select(tableName, cols, condition);
+            rows = db.select(tableName, resultColumns, condition);
         }
-
         long executionTimeMs = System.currentTimeMillis() - start;
-        return QueryResult.forSelect(cols, rows, executionTimeMs);
+        return QueryResult.forSelect(resultColumns, rows, executionTimeMs);
     }
-
 }
