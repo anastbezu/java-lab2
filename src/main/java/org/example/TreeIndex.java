@@ -89,7 +89,7 @@ public class TreeIndex implements Serializable {
      * @throws IOException если запись не удалась
      */
     public void save(String filePath) throws IOException {
-        try (java.io.FileOutputStream fileOut = new java.io.FileOutputStream(filePath);
+        try (FileOutputStream fileOut = new FileOutputStream(filePath);
              ObjectOutputStream out = new ObjectOutputStream(fileOut)) {
             out.writeObject(this);
         }
@@ -104,7 +104,7 @@ public class TreeIndex implements Serializable {
      * @throws ClassNotFoundException если файл содержит данные неизвестного класса
      */
     public static TreeIndex load(String filePath) throws IOException, ClassNotFoundException {
-        try (java.io.FileInputStream fileIn = new java.io.FileInputStream(filePath);
+        try (FileInputStream fileIn = new FileInputStream(filePath);
              ObjectInputStream in = new ObjectInputStream(fileIn)) {
             return (TreeIndex) in.readObject();
         }
@@ -145,8 +145,4 @@ public class TreeIndex implements Serializable {
         }
         return result;
     }
-
 }
-
-
-

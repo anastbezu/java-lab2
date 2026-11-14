@@ -8,16 +8,14 @@ import java.util.List;
  * Для SELECT содержит колонки и строки, для остальных команд — сообщение.
  */
 public class QueryResult {
-    private final boolean success;
     private final String message;
     private final List<String> columns;
     private final List<Row> rows;
     private final int affectedRows;
     private final long executionTimeMs;
 
-    private QueryResult(boolean success, String message, List<String> columns, List<Row> rows,
+    private QueryResult(String message, List<String> columns, List<Row> rows,
                         int affectedRows, long executionTimeMs) {
-        this.success = success;
         this.message = message;
         this.columns = columns;
         this.rows = rows;
@@ -29,14 +27,14 @@ public class QueryResult {
      * Результат SELECT.
      */
     public static QueryResult forSelect(List<String> columns, List<Row> rows, long executionTimeMs) {
-        return new QueryResult(true, "Найдено строк: " + rows.size(), columns, rows, rows.size(), executionTimeMs);
+        return new QueryResult("Найдено строк: " + rows.size(), columns, rows, rows.size(), executionTimeMs);
     }
 
     /**
      * Результат INSERT, UPDATE или DELETE.
      */
     public static QueryResult forMutation(int affectedRows, long executionTimeMs) {
-        return new QueryResult(true, "Задействовано строк: " + affectedRows,
+        return new QueryResult("Задействовано строк: " + affectedRows,
             new ArrayList<>(), new ArrayList<>(), affectedRows, executionTimeMs);
     }
 
@@ -44,11 +42,7 @@ public class QueryResult {
      * Результат CREATE TABLE, DROP TABLE, CREATE INDEX.
      */
     public static QueryResult forDdl(String message, long executionTimeMs) {
-        return new QueryResult(true, message, new ArrayList<>(), new ArrayList<>(), 0, executionTimeMs);
-    }
-
-    public boolean isSuccess() {
-        return success;
+        return new QueryResult(message, new ArrayList<>(), new ArrayList<>(), 0, executionTimeMs);
     }
 
     public String getMessage() {
