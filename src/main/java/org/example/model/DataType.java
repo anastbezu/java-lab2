@@ -3,14 +3,9 @@ package org.example.model;
 import java.time.LocalDate;
 
 /**
- * Типы данных, которые можно хранить в колонках таблицы.
- * <ul>
- *     <li>INT — целое число ({@link Integer})</li>
- *     <li>FLOAT — число с плавающей точкой ({@link Double})</li>
- *     <li>STRING — строка ({@link String})</li>
- *     <li>DATE — дата в формате YYYY-MM-DD ({@link LocalDate})</li>
- *     <li>BOOLEAN — логическое значение TRUE/FALSE ({@link Boolean})</li>
- * </ul>
+ * Типы, которые можно хранить в колонках:
+ * INT (Integer), FLOAT (Double), STRING (String), DATE (LocalDate, формат YYYY-MM-DD)
+ * и BOOLEAN (TRUE или FALSE).
  */
 public enum DataType {
     INT,
@@ -20,12 +15,12 @@ public enum DataType {
     BOOLEAN;
 
     /**
-     * Превращает текст из SQL-запроса в Java-объект нужного типа.
-     * Например, для INT строка "25" станет числом 25, для STRING "'BMW'" станет BMW.
+     * Переводит текст из запроса в значение нужного типа.
+     * Например, для INT "25" станет числом 25, а для STRING "'BMW'" станет строкой BMW.
      *
      * @param rawValue значение из запроса
-     * @return объект нужного типа или null, если передано NULL
-     * @throws IllegalArgumentException если значение нельзя преобразовать к типу
+     * @return значение нужного типа или null, если передали NULL
+     * @throws IllegalArgumentException если значение не подходит к типу
      */
     public Object parse(String rawValue) {
         if (rawValue == null || rawValue.trim().equalsIgnoreCase("NULL")) {
@@ -55,15 +50,15 @@ public enum DataType {
                     throw new IllegalArgumentException("неизвестный тип");
             }
         } catch (RuntimeException e) {
-            throw new IllegalArgumentException("Значение '" + rawValue + "' не подходит к типу " + this);
+            throw new IllegalArgumentException("Не получается записать '" + rawValue + "' в колонку типа " + this);
         }
     }
 
     /**
-     * Проверяет, что значение имеет правильный Java-тип для этой колонки.
+     * Проверяет, что значение подходит к этому типу. NULL подходит к любому типу.
      *
      * @param value проверяемое значение
-     * @return true, если значение подходит (null подходит всегда)
+     * @return true, если значение подходит
      */
     public boolean isCompatible(Object value) {
         if (value == null) {
@@ -83,16 +78,6 @@ public enum DataType {
             default:
                 return false;
         }
-    }
-
-    /**
-     * Сравнивает два значения одного типа (для условий WHERE с &lt; и &gt;).
-     *
-     * @return отрицательное число, если a &lt; b; 0, если равны; положительное, если a &gt; b
-     */
-    @SuppressWarnings({"unchecked", "rawtypes"})
-    public int compare(Object a, Object b) {
-        return ((Comparable) a).compareTo(b);
     }
 
     private static String removeQuotes(String value) {

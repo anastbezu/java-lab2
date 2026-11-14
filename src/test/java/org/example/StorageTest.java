@@ -8,21 +8,27 @@ import org.example.model.Column;
 import org.example.model.DataType;
 import org.example.model.Row;
 import org.example.model.TableSchema;
+import org.example.model.WhereCondition;
 import org.example.storage.Database;
 import org.example.storage.Table;
+import org.example.storage.TreeIndex;
 
 import java.io.File;
 import java.io.FileWriter;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 /**
- * Тесты слоя хранения: типы, ключи, UPDATE/DELETE, индексы и сохранение на диск.
+ * Тесты слоя хранения: типы, ключи, UPDATE и DELETE, индексы и сохранение на диск.
  */
 public class StorageTest {
 
@@ -34,18 +40,23 @@ public class StorageTest {
     @BeforeEach
     public void setUp() throws Exception {
         database = new Database(tempDir);
-        database.createTable(new TableSchema("manufacturers", Arrays.asList(
-                new Column("id", DataType.INT, true),
-                new Column("name", DataType.STRING),
-                new Column("country", DataType.STRING),
-                new Column("is_active", DataType.BOOLEAN))));
-        database.createTable(new TableSchema("cars", Arrays.asList(
-                new Column("id", DataType.INT, true),
-                new Column("brand", DataType.STRING),
-                new Column("price", DataType.FLOAT),
-                new Column("release_date", DataType.DATE),
-                new Column("in_stock", DataType.BOOLEAN),
-                new Column("manufacturer_id", DataType.INT, "manufacturers", "id"))));
+
+        List<Column> manufacturerColumns = new ArrayList<>();
+        manufacturerColumns.add(new Column("id", DataType.INT, true));
+        manufacturerColumns.add(new Column("name", DataType.STRING));
+        manufacturerColumns.add(new Column("country", DataType.STRING));
+        manufacturerColumns.add(new Column("is_active", DataType.BOOLEAN));
+        database.createTable(new TableSchema("manufacturers", manufacturerColumns));
+
+        List<Column> carColumns = new ArrayList<>();
+        carColumns.add(new Column("id", DataType.INT, true));
+        carColumns.add(new Column("brand", DataType.STRING));
+        carColumns.add(new Column("price", DataType.FLOAT));
+        carColumns.add(new Column("release_date", DataType.DATE));
+        carColumns.add(new Column("in_stock", DataType.BOOLEAN));
+        carColumns.add(new Column("manufacturer_id", DataType.INT, "manufacturers", "id"));
+        database.createTable(new TableSchema("cars", carColumns));
+
         database.insertInto("manufacturers", manufacturer(1, "BMW"));
     }
 
@@ -87,21 +98,38 @@ public class StorageTest {
         assertEquals(LocalDate.of(2023, 5, 10), DataType.DATE.parse("'2023-05-10'"));
         assertEquals(true, DataType.BOOLEAN.parse("TRUE"));
         assertNull(DataType.INT.parse("NULL"));
-        assertThrows(IllegalArgumentException.class, () -> DataType.INT.parse("abc"));
+
+        boolean failed = false;
+        try {
+            DataType.INT.parse("abc");
+        } catch (IllegalArgumentException e) {
+            failed = true;
+        }
+        assertTrue(failed, "Строка abc не должна превращаться в INT");
     }
 
     @Test
     public void testWrongTypeRejected() {
         Row row = car(1, "M5", 0, 1);
         row.set("price", 90000);
-        assertThrows(DatabaseException.class, () -> database.insertInto("cars", row));
+
+        boolean failed = false;
+        try {
+            database.insertInto("cars", row);
+        } catch (DatabaseException e) {
+            failed = true;
+        }
+        assertTrue(failed, "INT в колонку FLOAT записываться не должен");
     }
 
     @Test
     public void testCreateRowFromQueryValues() throws Exception {
         TableSchema schema = cars().getSchema();
-        Row row = schema.createRowFromNamedValues(Arrays.asList("id", "brand"), Arrays.asList("2", "'BMW'"));
+        List<String> names = Arrays.asList("id", "brand");
+        List<String> values = Arrays.asList("2", "'BMW'");
+        Row row = schema.createRowFromNamedValues(names, values);
         database.insertInto("cars", row);
+
         assertEquals("BMW", cars().getById(2).get("brand"));
         assertNull(cars().getById(2).get("price"));
     }
@@ -109,61 +137,122 @@ public class StorageTest {
     @Test
     public void testInsertAndSelect() throws Exception {
         database.insertInto("cars", car(101, "M5", 85000.0, 1));
-        List<Row> rows = database.select("cars", Arrays.asList("brand", "price"), row -> (Double) row.get("price") > 20000);
+        List<String> columns = Arrays.asList("brand", "price");
+        WhereCondition expensive = new WhereCondition("price", ">", "20000");
+        List<Row> rows = database.select("cars", columns, expensive);
+
         assertEquals(1, rows.size());
         assertEquals("M5", rows.get(0).get("brand"));
         assertNull(rows.get(0).get("id"), "В результате должны быть только brand и price");
     }
 
     @Test
-    public void testDuplicatePrimaryKeyRejected() throws Exception {
-        assertThrows(DatabaseException.class, () -> database.insertInto("manufacturers", manufacturer(1, "Honda")));
+    public void testDuplicatePrimaryKeyRejected() {
+        boolean failed = false;
+        try {
+            database.insertInto("manufacturers", manufacturer(1, "Honda"));
+        } catch (DatabaseException e) {
+            failed = true;
+        }
+        assertTrue(failed, "Второй производитель с id = 1 вставляться не должен");
     }
 
     @Test
-    public void testBatchInsertWithDuplicateInsertsNothing() {
-        List<Row> batch = Arrays.asList(car(1, "M5", 1.0, 1), car(2, "X5", 1.0, 1), car(1, "Dup", 1.0, 1));
-        assertThrows(DatabaseException.class, () -> database.insertAll("cars", batch));
-        assertDoesNotThrow(() -> assertEquals(0, cars().size()));
+    public void testBatchInsertWithDuplicateInsertsNothing() throws Exception {
+        List<Row> batch = new ArrayList<>();
+        batch.add(car(1, "M5", 1.0, 1));
+        batch.add(car(2, "X5", 1.0, 1));
+        batch.add(car(1, "Dup", 1.0, 1));
+
+        boolean failed = false;
+        try {
+            database.insertAll("cars", batch);
+        } catch (DatabaseException e) {
+            failed = true;
+        }
+        assertTrue(failed, "Пачка с повтором id должна отклоняться");
+        assertEquals(0, cars().size());
     }
 
     @Test
     public void testMissingParentRejected() {
-        assertThrows(DatabaseException.class, () -> database.insertInto("cars", car(1, "Ghost", 1.0, 999)));
+        boolean failed = false;
+        try {
+            database.insertInto("cars", car(1, "Ghost", 1.0, 999));
+        } catch (DatabaseException e) {
+            failed = true;
+        }
+        assertTrue(failed, "Машина с несуществующим производителем вставляться не должна");
     }
 
     @Test
     public void testDeleteReferencedParentRejected() throws Exception {
         database.insertInto("cars", car(1, "M5", 90000.0, 1));
-        assertThrows(DatabaseException.class,
-                () -> database.delete("manufacturers", row -> Integer.valueOf(1).equals(row.get("id"))));
+
+        boolean failed = false;
+        try {
+            database.delete("manufacturers", new WhereCondition("id", "=", "1"));
+        } catch (DatabaseException e) {
+            failed = true;
+        }
+        assertTrue(failed, "Производителя, на которого ссылается машина, удалять нельзя");
         assertEquals(1, database.getTable("manufacturers").size());
     }
 
     @Test
     public void testUpdateToMissingParentRejected() throws Exception {
         database.insertInto("cars", car(1, "M5", 90000.0, 1));
-        assertThrows(DatabaseException.class, () -> database.update("cars", null, set("manufacturer_id", 999)));
+
+        boolean failed = false;
+        try {
+            database.update("cars", null, set("manufacturer_id", 999));
+        } catch (DatabaseException e) {
+            failed = true;
+        }
+        assertTrue(failed, "Ссылку на несуществующего производителя ставить нельзя");
     }
 
     @Test
     public void testUpdatePrimaryKeyRejected() throws Exception {
         database.insertInto("cars", car(1, "M5", 90000.0, 1));
-        assertThrows(DatabaseException.class, () -> database.update("cars", null, set("id", 5)));
+
+        boolean failed = false;
+        try {
+            database.update("cars", null, set("id", 5));
+        } catch (DatabaseException e) {
+            failed = true;
+        }
+        assertTrue(failed, "Первичный ключ через UPDATE менять нельзя");
     }
 
     @Test
     public void testTableWithoutPrimaryKeyRejected() {
-        assertThrows(IllegalArgumentException.class,
-                () -> new TableSchema("logs", Arrays.asList(new Column("msg", DataType.STRING))));
+        List<Column> columns = new ArrayList<>();
+        columns.add(new Column("msg", DataType.STRING));
+
+        boolean failed = false;
+        try {
+            new TableSchema("logs", columns);
+        } catch (IllegalArgumentException e) {
+            failed = true;
+        }
+        assertTrue(failed, "Таблица без первичного ключа создаваться не должна");
     }
 
     @Test
     public void testForeignKeyToMissingTableRejected() {
-        TableSchema pets = new TableSchema("pets", Arrays.asList(
-                new Column("id", DataType.INT, true),
-                new Column("owner_id", DataType.INT, "people", "id")));
-        assertThrows(DatabaseException.class, () -> database.createTable(pets));
+        List<Column> columns = new ArrayList<>();
+        columns.add(new Column("id", DataType.INT, true));
+        columns.add(new Column("owner_id", DataType.INT, "people", "id"));
+        TableSchema pets = new TableSchema("pets", columns);
+
+        boolean failed = false;
+        try {
+            database.createTable(pets);
+        } catch (DatabaseException e) {
+            failed = true;
+        }
+        assertTrue(failed, "Внешний ключ на несуществующую таблицу должен отклоняться");
     }
 
     @Test
@@ -171,8 +260,10 @@ public class StorageTest {
         database.insertInto("cars", car(1, "M5", 90000.0, 1));
         database.insertInto("cars", car(2, "X5", 70000.0, 1));
 
-        assertEquals(1, database.update("cars", row -> Integer.valueOf(1).equals(row.get("id")), set("price", 95000.0)));
-        assertEquals(1, database.delete("cars", row -> "X5".equals(row.get("brand"))));
+        int updated = database.update("cars", new WhereCondition("id", "=", "1"), set("price", 95000.0));
+        int deleted = database.delete("cars", new WhereCondition("brand", "=", "X5"));
+        assertEquals(1, updated);
+        assertEquals(1, deleted);
 
         Database restarted = new Database(tempDir);
         Table cars = restarted.getTable("cars");
@@ -198,7 +289,14 @@ public class StorageTest {
         assertFalse(database.hasTable("cars"));
         assertFalse(new File(tempDir, "cars.db").exists());
         assertFalse(new File(tempDir, "idx_cars_brand.idx").exists());
-        assertThrows(DatabaseException.class, () -> database.dropTable("unknown"));
+
+        boolean failed = false;
+        try {
+            database.dropTable("unknown");
+        } catch (DatabaseException e) {
+            failed = true;
+        }
+        assertTrue(failed, "Удаление несуществующей таблицы должно давать ошибку");
     }
 
     @Test
@@ -211,11 +309,11 @@ public class StorageTest {
         database.insertInto("cars", car(3, "M5", 95000.0, 1));
         assertEquals(Arrays.asList(1, 3), index.get("M5"));
 
-        database.update("cars", row -> Integer.valueOf(2).equals(row.get("id")), set("brand", "X6"));
+        database.update("cars", new WhereCondition("id", "=", "2"), set("brand", "X6"));
         assertTrue(index.get("X5").isEmpty());
         assertEquals(Arrays.asList(2), index.get("X6"));
 
-        database.delete("cars", row -> Integer.valueOf(1).equals(row.get("id")));
+        database.delete("cars", new WhereCondition("id", "=", "1"));
         assertEquals(Arrays.asList(3), index.get("M5"));
     }
 
@@ -224,13 +322,70 @@ public class StorageTest {
         database.insertInto("cars", car(1, "M5", 90000.0, 1));
         database.insertInto("cars", car(2, "X5", 70000.0, 1));
         database.insertInto("cars", car(3, "M5", 95000.0, 1));
+        List<String> columns = Arrays.asList("id");
 
-        List<Row> withoutIndex = database.selectEquals("cars", "brand", "M5", Arrays.asList("id"));
+        List<Row> withoutIndex = database.selectEquals("cars", "brand", "M5", columns);
         database.createIndex("idx_cars_brand", "cars", "brand");
-        List<Row> withIndex = database.selectEquals("cars", "brand", "M5", Arrays.asList("id"));
+        List<Row> withIndex = database.selectEquals("cars", "brand", "M5", columns);
 
         assertEquals(2, withIndex.size());
         assertEquals(withoutIndex, withIndex);
+    }
+
+    @Test
+    public void testRangeSelectSameWithAndWithoutIndex() throws Exception {
+        database.insertInto("cars", car(1, "M5", 90000.0, 1));
+        database.insertInto("cars", car(2, "X5", 70000.0, 1));
+        database.insertInto("cars", car(3, "X6", 95000.0, 1));
+        List<String> columns = Arrays.asList("id");
+        WhereCondition expensive = new WhereCondition("price", ">", "80000");
+        WhereCondition cheap = new WhereCondition("price", "<", "80000");
+
+        List<Row> expensiveWithout = database.select("cars", columns, expensive);
+        List<Row> cheapWithout = database.select("cars", columns, cheap);
+        database.createIndex("idx_cars_price", "cars", "price");
+        List<Row> expensiveWith = database.select("cars", columns, expensive);
+        List<Row> cheapWith = database.select("cars", columns, cheap);
+
+        assertEquals(2, expensiveWith.size());
+        assertEquals(expensiveWithout, expensiveWith);
+        assertEquals(1, cheapWith.size());
+        assertEquals(cheapWithout, cheapWith);
+    }
+
+    @Test
+    public void testGreaterOrEqualAndLessOrEqual() throws Exception {
+        database.insertInto("cars", car(1, "M5", 90000.0, 1));
+        database.insertInto("cars", car(2, "X5", 70000.0, 1));
+        database.insertInto("cars", car(3, "X6", 95000.0, 1));
+        List<String> columns = Arrays.asList("id");
+        WhereCondition atLeast = new WhereCondition("price", ">=", "90000");
+        WhereCondition atMost = new WhereCondition("price", "<=", "90000");
+
+        List<Row> atLeastWithout = database.select("cars", columns, atLeast);
+        List<Row> atMostWithout = database.select("cars", columns, atMost);
+        database.createIndex("idx_cars_price", "cars", "price");
+        List<Row> atLeastWith = database.select("cars", columns, atLeast);
+        List<Row> atMostWith = database.select("cars", columns, atMost);
+
+        // через индекс строки идут по возрастанию цены, поэтому сравниваем состав, а не порядок
+        assertEquals(2, atLeastWithout.size());
+        assertEquals(2, atMostWithout.size());
+        assertEquals(atLeastWithout.size(), atLeastWith.size());
+        assertTrue(atLeastWith.containsAll(atLeastWithout));
+        assertEquals(atMostWithout.size(), atMostWith.size());
+        assertTrue(atMostWith.containsAll(atMostWithout));
+    }
+
+    @Test
+    public void testGreaterOrEqualOnStringRejected() {
+        boolean failed = false;
+        try {
+            database.select("cars", null, new WhereCondition("brand", ">=", "A"));
+        } catch (DatabaseException e) {
+            failed = true;
+        }
+        assertTrue(failed, ">= для строковой колонки должен отклоняться");
     }
 
     @Test
@@ -250,12 +405,12 @@ public class StorageTest {
         database.insertInto("cars", car(1, "M5", 90000.0, 1));
         database.createIndex("idx_cars_brand", "cars", "brand");
 
-        try (FileWriter writer = new FileWriter(new File(tempDir, "idx_cars_brand.idx"))) {
+        File indexFile = new File(tempDir, "idx_cars_brand.idx");
+        try (FileWriter writer = new FileWriter(indexFile)) {
             writer.write("broken");
         }
 
         Database restarted = new Database(tempDir);
         assertEquals(Arrays.asList(1), restarted.findIndex("cars", "brand").get("M5"));
-
     }
 }

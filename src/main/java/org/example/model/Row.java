@@ -4,11 +4,10 @@ import java.io.Serializable;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.Objects;
 
 /**
- * Одна строка (запись) таблицы: пары «имя колонки → значение».
- * Имена колонок не зависят от регистра: {@code get("Brand")} и {@code get("brand")} — одно и то же.
+ * Одна строка таблицы: набор пар "колонка -> значение".
+ * Регистр в именах колонок не важен, get("Brand") и get("brand") вернут одно и то же.
  */
 public class Row implements Serializable {
     private static final long serialVersionUID = 1L;
@@ -19,25 +18,27 @@ public class Row implements Serializable {
      * Возвращает значение колонки или null, если его нет.
      */
     public Object get(String columnName) {
-        return values.get(columnName.trim().toLowerCase());
+        String key = columnName.trim().toLowerCase();
+        return values.get(key);
     }
 
     /**
      * Записывает значение в колонку.
      */
     public void set(String columnName, Object value) {
-        values.put(columnName.trim().toLowerCase(), value);
+        String key = columnName.trim().toLowerCase();
+        values.put(key, value);
     }
 
     /**
-     * Возвращает все пары «колонка → значение» (только для чтения).
+     * Возвращает все значения строки. Менять их через этот метод нельзя.
      */
     public Map<String, Object> getValues() {
         return Collections.unmodifiableMap(values);
     }
 
     /**
-     * Создаёт независимую копию строки.
+     * Делает копию строки, которую можно менять, не трогая оригинал.
      */
     public Row copy() {
         Row copy = new Row();
@@ -50,12 +51,13 @@ public class Row implements Serializable {
         if (!(o instanceof Row)) {
             return false;
         }
-        return values.equals(((Row) o).values);
+        Row other = (Row) o;
+        return values.equals(other.values);
     }
 
     @Override
     public int hashCode() {
-        return Objects.hash(values);
+        return values.hashCode();
     }
 
     @Override
